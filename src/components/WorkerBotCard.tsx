@@ -18,6 +18,11 @@ import {
   Square,
   SlidersHorizontal,
   Check,
+  Terminal,
+  ChevronDown,
+  ChevronUp,
+  RefreshCw,
+  CheckCircle,
 } from 'lucide-react';
 import { WorkerBotData } from '../types/trading';
 
@@ -45,6 +50,57 @@ export const WorkerBotCard: React.FC<WorkerBotCardProps> = ({
   const [customLeverage, setCustomLeverage] = useState<number>(bot.leverage);
   const [customDcaMin, setCustomDcaMin] = useState<number>(bot.metrics.dcaRangeMin);
   const [customDcaMax, setCustomDcaMax] = useState<number>(bot.metrics.dcaRangeMax);
+  const [isExecutingCliOrder, setIsExecutingCliOrder] = useState<boolean>(false);
+  const [cliExecutionSuccess, setCliExecutionSuccess] = useState<string | null>(null);
+  const [showCliHistory, setShowCliHistory] = useState<boolean>(false);
+
+  const handleExecuteCliOrder = async () => {
+    setIsExecutingCliOrder(true);
+    setCliExecutionSuccess(null);
+    try {
+      const krakenPair =
+        bot.krakenPair ||
+        (bot.pair.includes('BTC')
+          ? 'BTC/USD'
+          : bot.pair.includes('ETH')
+          ? 'ETH/USD'
+          : bot.pair.includes('SOL')
+          ? 'SOL/USD'
+          : 'BTC/USD');
+      const orderPrice = bot.currentPrice;
+      const trancheInvestment = Math.max(
+        10,
+        (bot.metrics.investment || 100) / (bot.metrics.dcaSteps || 60)
+      );
+      const volume = Number((trancheInvestment / orderPrice).toFixed(4)) || 0.001;
+
+      const res = await fetch('/api/kraken/cli/bot-order', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          botId: bot.id,
+          botName: bot.name,
+          pair: krakenPair,
+          side: 'buy',
+          orderType: 'limit',
+          price: orderPrice,
+          volume,
+          leverage: bot.leverage || 1,
+          reason: 'Manual Tranche Trigger via Worker Bot Card',
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Execution failed');
+      }
+      setCliExecutionSuccess(`TXID: ${data.txid} [${data.cliCommand}]`);
+      setTimeout(() => setCliExecutionSuccess(null), 8000);
+    } catch (err: any) {
+      alert(`Fehler bei Kraken CLI Order: ${err.message}`);
+    } finally {
+      setIsExecutingCliOrder(false);
+    }
+  };
 
   // Dynamic formatting utilities (adaptable to any token price scale)
   const formatPrice = (val: number | undefined) => {
@@ -79,9 +135,9 @@ export const WorkerBotCard: React.FC<WorkerBotCardProps> = ({
   const isProfitPositive = (bot.unrealizedPnL?.value ?? 0) >= 0;
   const isLong = bot.direction === 'LONG';
 
-  // Pair and Strategy label normalization
-  const displayPair = bot.pair || bot.symbol || 'ASSET/USDT.P';
-  const displayStrategy = bot.strategy || bot.instrumentType || 'PERPETUAL FUTURES · STRATEGY';
+  // Pair and Strategy label normalization (Strict Kraken identity)
+  const displayPair = bot.pair || bot.symbol || 'BTC/USD';
+  const displayStrategy = bot.strategy || bot.instrumentType || 'KRAKEN FUTURES · DCA STRATEGY';
 
   // Metrics normalization
   const investment = bot.metrics?.investment ?? bot.investmentUsd ?? 100;
@@ -494,6 +550,95 @@ export const WorkerBotCard: React.FC<WorkerBotCardProps> = ({
             {cycles}×
           </div>
         </div>
+      </div>
+
+      {/* 5.5 Kraken CLI Execution & Routing Module */}
+      <div className="bg-[#111624] border border-amber-500/20 rounded-xl p-3 space-y-2.5">
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <div className="flex items-center gap-2">
+            <div className="w-5 h-5 rounded bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400">
+              <Terminal className="w-3 h-3" />
+            </div>
+            <div>
+              <div className="text-[10px] font-mono font-bold text-amber-300 uppercase tracking-wider flex items-center gap-1.5">
+                <span>Kraken CLI Gateway (SoT)</span>
+                <span className="px-1.5 py-0.2 rounded bg-emerald-500/10 text-emerald-400 text-[9px] border border-emerald-500/30">
+                  AKTIV
+                </span>
+              </div>
+              <div className="text-[10px] font-mono text-slate-400">
+                Pair: <span className="text-slate-200">{bot.krakenPair || (bot.pair.includes('BTC') ? 'BTC/USD' : bot.pair.includes('ETH') ? 'ETH/USD' : 'BTC/USD')}</span> • Mode: <span className="text-amber-300">kraken paper buy/sell</span>
+              </div>
+            </div>
+          </div>
+
+          <button
+            onClick={handleExecuteCliOrder}
+            disabled={isExecutingCliOrder}
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 text-xs font-mono font-bold transition shadow-sm disabled:opacity-50"
+            title="Sendet einen echten DCA-Kaufbefehl (kraken paper buy) an die Kraken CLI Engine"
+          >
+            <Zap className={`w-3 h-3 ${isExecutingCliOrder ? 'animate-spin' : ''}`} />
+            <span>{isExecutingCliOrder ? 'Sende CLI...' : '⚡ DCA Tranche via CLI ausführen'}</span>
+          </button>
+        </div>
+
+        {/* Success Alert Banner */}
+        {cliExecutionSuccess && (
+          <div className="p-2 rounded bg-emerald-500/10 border border-emerald-500/30 text-[11px] font-mono text-emerald-300 flex items-start gap-1.5">
+            <CheckCircle className="w-3.5 h-3.5 text-emerald-400 shrink-0 mt-0.5" />
+            <div className="break-all">
+              <span className="font-bold">Order über Kraken CLI platziert: </span>
+              {cliExecutionSuccess}
+            </div>
+          </div>
+        )}
+
+        {/* Latest CLI Execution Line */}
+        {bot.lastCliExecution ? (
+          <div className="bg-slate-950/60 border border-slate-800 rounded p-2 text-[11px] font-mono text-slate-300 flex items-center justify-between gap-2">
+            <div className="truncate flex items-center gap-1.5">
+              <span className="text-slate-500">$</span>
+              <span className="text-amber-300 font-semibold truncate">{bot.lastCliExecution.command}</span>
+            </div>
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 shrink-0">
+              TXID: {bot.lastCliExecution.txid.slice(0, 14)}...
+            </span>
+          </div>
+        ) : (
+          <div className="text-[10px] font-mono text-slate-500 flex items-center justify-between">
+            <span>Keine manuellen Einzelschritte seit Start. Bot-DCA läuft synchron.</span>
+            <span className="text-slate-400">Total Orders: {bot.metrics.dcaOrdersTriggered}</span>
+          </div>
+        )}
+
+        {/* History Toggle */}
+        {bot.cliExecutionHistory && bot.cliExecutionHistory.length > 0 && (
+          <div>
+            <button
+              onClick={() => setShowCliHistory(!showCliHistory)}
+              className="text-[10px] font-mono text-slate-400 hover:text-amber-300 flex items-center gap-1 transition"
+            >
+              {showCliHistory ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+              <span>Kraken CLI Transaktionen ({bot.cliExecutionHistory.length})</span>
+            </button>
+
+            {showCliHistory && (
+              <div className="mt-2 max-h-32 overflow-y-auto space-y-1 pr-1">
+                {bot.cliExecutionHistory.map((item, idx) => (
+                  <div
+                    key={idx}
+                    className="p-1.5 rounded bg-slate-950/40 border border-slate-800/80 text-[10px] font-mono flex items-center justify-between gap-2"
+                  >
+                    <span className="text-amber-400 font-bold uppercase">{item.side} {item.volume}</span>
+                    <span className="text-slate-300">@ ${item.price?.toLocaleString()}</span>
+                    <span className="text-slate-500 text-[9px] truncate max-w-[120px]">{item.txid}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* 6. Total Profit Hero Card */}

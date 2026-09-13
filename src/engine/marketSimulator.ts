@@ -18,9 +18,10 @@ export interface AssetConfig {
 }
 
 export const SUPPORTED_ASSETS: AssetConfig[] = [
-  { symbol: 'BTC/USD', name: 'Bitcoin Perpetual', basePrice: 68450.0, tickSize: 0.5, volatility: 0.0012, drift: 0.00001, typicalSpreadBps: 1.5 },
-  { symbol: 'ETH/USD', name: 'Ethereum Perpetual', basePrice: 3520.0, tickSize: 0.05, volatility: 0.0018, drift: 0.00001, typicalSpreadBps: 2.1 },
-  { symbol: 'SOL/USD', name: 'Solana Perpetual', basePrice: 148.5, tickSize: 0.01, volatility: 0.0026, drift: 0.00002, typicalSpreadBps: 3.4 },
+  { symbol: 'BTC/USD', name: 'Bitcoin Perpetual', basePrice: 76767.0, tickSize: 0.5, volatility: 0.0012, drift: 0.00001, typicalSpreadBps: 1.5 },
+  { symbol: 'ETH/USD', name: 'Ethereum Perpetual', basePrice: 2477.0, tickSize: 0.05, volatility: 0.0018, drift: 0.00001, typicalSpreadBps: 2.1 },
+  { symbol: 'SOL/USD', name: 'Solana Perpetual', basePrice: 99.70, tickSize: 0.01, volatility: 0.0026, drift: 0.00002, typicalSpreadBps: 3.4 },
+  { symbol: 'HYPE/USD', name: 'Hyperliquid Token', basePrice: 77.58, tickSize: 0.01, volatility: 0.0035, drift: 0.00002, typicalSpreadBps: 1.8 },
   { symbol: 'NVDA', name: 'Nvidia Corp Equities', basePrice: 128.4, tickSize: 0.01, volatility: 0.0015, drift: 0.00001, typicalSpreadBps: 2.0 },
   { symbol: 'SPY', name: 'S&P 500 ETF Trust', basePrice: 554.2, tickSize: 0.01, volatility: 0.0008, drift: 0.000005, typicalSpreadBps: 0.8 },
 ];
@@ -263,7 +264,7 @@ export function executeVerdict(
     peakNav: Math.round(peakNav * 100) / 100,
     currentDrawdownPct: Math.round(currentDrawdownPct * 100) / 100,
     maxDrawdownPct: Math.round(maxDrawdownPct * 100) / 100,
-    dailyPnlPct: Math.round(((updatedNav - 500000) / 500000) * 10000) / 100,
+    dailyPnlPct: portfolio.peakNav > 0 ? Math.round(((updatedNav - portfolio.peakNav) / portfolio.peakNav) * 10000) / 100 : 0,
     cvar99Usd,
     var99Usd,
     positions: updatedPositions,

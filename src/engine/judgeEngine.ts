@@ -13,13 +13,19 @@ export function adjudicateSignal(
   portfolio: PortfolioState,
   marketBook: OrderbookData | undefined,
   config: JudgeConfig,
-  strategy: StrategyAgent | undefined
+  strategy: StrategyAgent | undefined,
+  authoritativeNavUsd?: number
 ): JudgeVerdict {
   const gateResults: GateResult[] = [];
   const now = Date.now();
   let approvedSizeUsd = signal.suggestedSizeUsd;
   let scaleFactor = 1.0;
   let failedGate: string | undefined;
+
+  // Strict Authoritative NAV: prioritize kraken balance navUsd over any internal or simulated state
+  const effectiveNavUsd = (typeof authoritativeNavUsd === 'number' && authoritativeNavUsd > 0)
+    ? authoritativeNavUsd
+    : (portfolio.navUsd || 100000);
 
   // ----------------------------------------------------
   // M1: Sanity & Latency Monotonicity Gate
@@ -49,8 +55,8 @@ export function adjudicateSignal(
   const currentAssetUsd = currentAssetPos ? currentAssetPos.allocatedUsd : 0;
 
   const projectedGrossUsd = currentGrossUsd + approvedSizeUsd;
-  const projectedGrossLeverage = projectedGrossUsd / Math.max(portfolio.navUsd, 1);
-  const projectedAssetConcentrationPct = ((currentAssetUsd + approvedSizeUsd) / Math.max(portfolio.navUsd, 1)) * 100;
+  const projectedGrossLeverage = projectedGrossUsd / Math.max(effectiveNavUsd, 1);
+  const projectedAssetConcentrationPct = ((currentAssetUsd + approvedSizeUsd) / Math.max(effectiveNavUsd, 1)) * 100;
 
   const m2Passed =
     projectedGrossLeverage <= config.maxGrossLeverage &&
@@ -103,11 +109,11 @@ export function adjudicateSignal(
   // Kelly formula: f* = (p * (b + 1) - 1) / b
   const fullKellyFraction = Math.max(0, (winRate * (payoffRatio + 1) - 1) / payoffRatio);
   const halfKelly = fullKellyFraction * config.kellyFraction;
-  const maxKellySizeUsd = Math.round(portfolio.navUsd * halfKelly * signal.confidence);
+  const maxKellySizeUsd = Math.round(effectiveNavUsd * halfKelly * signal.confidence);
 
   let m4Modified = false;
   if (approvedSizeUsd > maxKellySizeUsd) {
-    approvedSizeUsd = Math.max(5000, maxKellySizeUsd);
+    approvedSizeUsd = Math.max(Math.round(effectiveNavUsd * 0.01), maxKellySizeUsd);
     scaleFactor = approvedSizeUsd / signal.suggestedSizeUsd;
     m4Modified = true;
   }
@@ -208,16 +214,19 @@ export function adjudicateSignal(
   let urgency: 'HIGH' | 'MEDIUM' | 'LOW' = 'MEDIUM';
   let maxSlippageBps = 3.5;
 
-  if (signal.expectedAlphaBps >= 20 && approvedSizeUsd <= 18000) {
+  const dmaThreshold = Math.max(5000, Math.round(effectiveNavUsd * 0.15));
+  const twapThreshold = Math.max(15000, Math.round(effectiveNavUsd * 0.30));
+
+  if (signal.expectedAlphaBps >= 20 && approvedSizeUsd <= dmaThreshold) {
     // High conviction alpha with small size gets DMA
     executionRoute = 'DIRECT_DMA';
     urgency = 'HIGH';
     sliceCount = 1;
     maxSlippageBps = 5.0;
-  } else if (approvedSizeUsd >= 35000) {
+  } else if (approvedSizeUsd >= twapThreshold) {
     // Large blocks routed through TWAP slicer across time horizon
     executionRoute = 'TWAP_SLICER';
-    sliceCount = Math.min(10, Math.max(4, Math.floor(approvedSizeUsd / 6000)));
+    sliceCount = Math.min(10, Math.max(4, Math.floor(approvedSizeUsd / Math.max(1000, effectiveNavUsd * 0.05))));
     urgency = 'LOW';
     maxSlippageBps = 2.0;
   } else if (marketBook && marketBook.spreadBps <= 2.0) {

@@ -207,7 +207,7 @@ export function useKrakenStream(
   const isWsConnectedRef = useRef<boolean>(false);
 
   /**
-   * Resolve WebSocket target URL targeting port 1000.
+   * Resolve WebSocket target URL targeting port 1000 or container reverse proxy.
    */
   const resolveTargetWsUrl = useCallback((): string => {
     if (wsUrl) return wsUrl;
@@ -215,8 +215,14 @@ export function useKrakenStream(
 
     // Respect page protocol (wss for https, ws for http)
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const hostname = window.location.hostname || 'localhost';
+    const isHttps = window.location.protocol === 'https:';
 
+    // In HTTPS or single-port container proxy environments, connect to the primary /api/kraken/ws endpoint
+    if (isHttps || window.location.port === '3000' || !window.location.port) {
+      return `${protocol}//${window.location.host}/api/kraken/ws`;
+    }
+
+    const hostname = window.location.hostname || 'localhost';
     return `${protocol}//${hostname}:${port}`;
   }, [wsUrl, port]);
 
@@ -326,6 +332,70 @@ export function useKrakenStream(
           });
         }
         setIsRealKrakenData(true);
+        return;
+      }
+
+      // 4. Kraken WebSocket v2 'ticker' channel frames (STRICT PRICE PARITY & AUTHORITATIVE TICK)
+      if (data.channel === 'ticker' && Array.isArray(data.data)) {
+        for (const item of data.data) {
+          const sym = item.symbol;
+          if (!sym) continue;
+          const current = marketsRef.current[sym];
+          const bestBid = typeof item.bid === 'number' ? item.bid : item.bid?.price;
+          const bestAsk = typeof item.ask === 'number' ? item.ask : item.ask?.price;
+          const lastPrice = typeof item.last === 'number'
+            ? item.last
+            : (bestBid && bestAsk ? (bestBid + bestAsk) / 2 : current?.lastPrice || 1);
+
+          const spread = bestAsk && bestBid ? Math.round((bestAsk - bestBid) * 100) / 100 : current?.spread || 0.01;
+          const spreadBps = bestAsk && bestBid ? Math.round(((spread / lastPrice) * 10000) * 10) / 10 : current?.spreadBps || 1.0;
+          const priceChange24h = typeof item.change_pct === 'number'
+            ? Math.round(item.change_pct * 100) / 100
+            : (typeof item.change === 'number' ? Math.round((item.change / lastPrice) * 10000) / 100 : current?.priceChange24h || 0);
+
+          ingestOrderbook(sym, {
+            ...(current || {}),
+            symbol: sym,
+            lastPrice,
+            priceChange24h,
+            high24h: item.high || current?.high24h || lastPrice * 1.02,
+            low24h: item.low || current?.low24h || lastPrice * 0.98,
+            volume24h: item.volume || current?.volume24h || 50000000,
+            spread,
+            spreadBps,
+            bids: current?.bids || [],
+            asks: current?.asks || [],
+            recentTrades: current?.recentTrades || [],
+          });
+        }
+        setIsRealKrakenData(true);
+        return;
+      }
+
+      // 5. Kraken WebSocket v2 'trade' channel frames
+      if (data.channel === 'trade' && Array.isArray(data.data)) {
+        for (const t of data.data) {
+          const sym = t.symbol;
+          if (!sym) continue;
+          const current = marketsRef.current[sym];
+          const lastPrice = Number(t.price) || current?.lastPrice || 1;
+          const trades = current?.recentTrades ? [...current.recentTrades] : [];
+          trades.unshift({
+            id: String(t.trade_id || Date.now()),
+            price: lastPrice,
+            size: Number(t.qty) || 0.1,
+            side: t.side === 'buy' ? 'BUY' : 'SELL',
+            timestamp: Date.now(),
+          });
+          ingestOrderbook(sym, {
+            ...(current || {}),
+            symbol: sym,
+            lastPrice,
+            recentTrades: trades.slice(0, 20),
+          });
+        }
+        setIsRealKrakenData(true);
+        return;
       }
     },
     [ingestOrderbook]

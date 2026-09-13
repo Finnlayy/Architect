@@ -46,6 +46,7 @@ export const Header: React.FC<HeaderProps> = ({
     { id: 'swarm', label: 'The Swarm (Alpha Agents)' },
     { id: 'bots', label: 'Worker & DCA Bots' },
     { id: 'portfolio', label: 'Portfolio & Executions' },
+    { id: 'kraken-cli', label: 'Kraken CLI & MCP' },
     { id: 'orderbook', label: 'L2 Microstructure' },
     { id: 'blueprint', label: 'Drive & Blueprint Specs' },
   ];

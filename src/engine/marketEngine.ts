@@ -2,11 +2,11 @@ import { OrderbookData, OrderbookEntry, PortfolioState, Position, ExecutionOrder
 
 export function createInitialMarketData(): Record<string, OrderbookData> {
   return {
-    'BTC/USD': createMockBook('BTC/USD', 64250.0, 0.5, 85000000),
-    'ETH/USD': createMockBook('ETH/USD', 3480.0, 0.2, 45000000),
-    'SOL/USD': createMockBook('SOL/USD', 148.5, 0.04, 18000000),
+    'BTC/USD': createMockBook('BTC/USD', 76767.0, 0.5, 95000000),
+    'ETH/USD': createMockBook('ETH/USD', 2477.0, 0.1, 45000000),
+    'SOL/USD': createMockBook('SOL/USD', 99.70, 0.02, 18000000),
     'NIO/USD': createMockBook('NIO/USD', 5.82, 0.01, 12000000),
-    'HYPE/USD': createMockBook('HYPE/USD', 43.120, 0.005, 32000000),
+    'HYPE/USD': createMockBook('HYPE/USD', 77.58, 0.01, 34000000),
   };
 }
 
@@ -68,12 +68,60 @@ export function createMockBook(
   };
 }
 
+/**
+ * Prioritizes live Kraken WS ticker and orderbook data over internal simulation.
+ * Ensures that any symbol with live Kraken exchange data maintains strict price parity
+ * across the Swarm, The Judge, and all Worker Bots.
+ */
+export function prioritizeKrakenMarketData(
+  simulatedMarkets: Record<string, OrderbookData>,
+  krakenWsMarkets: Record<string, OrderbookData>,
+  isKrakenLive: boolean
+): Record<string, OrderbookData> {
+  const consolidated: Record<string, OrderbookData> = { ...simulatedMarkets };
+
+  for (const [sym, krakenBook] of Object.entries(krakenWsMarkets)) {
+    if (!krakenBook || typeof krakenBook.lastPrice !== 'number' || krakenBook.lastPrice <= 0) {
+      continue;
+    }
+
+    if (isKrakenLive || (simulatedMarkets[sym] && krakenBook.lastPrice > 0)) {
+      const existing = consolidated[sym];
+      consolidated[sym] = {
+        ...(existing || {}),
+        ...krakenBook,
+        symbol: sym,
+        // Guarantee authoritative price and metrics from Kraken exchange
+        lastPrice: krakenBook.lastPrice,
+        priceChange24h: krakenBook.priceChange24h ?? existing?.priceChange24h ?? 0,
+        high24h: krakenBook.high24h || existing?.high24h || krakenBook.lastPrice * 1.02,
+        low24h: krakenBook.low24h || existing?.low24h || krakenBook.lastPrice * 0.98,
+        volume24h: krakenBook.volume24h || existing?.volume24h || 50000000,
+        spread: krakenBook.spread ?? existing?.spread ?? 0.5,
+        spreadBps: krakenBook.spreadBps ?? existing?.spreadBps ?? 1.0,
+        bids: krakenBook.bids && krakenBook.bids.length > 0 ? krakenBook.bids : existing?.bids || [],
+        asks: krakenBook.asks && krakenBook.asks.length > 0 ? krakenBook.asks : existing?.asks || [],
+        recentTrades: krakenBook.recentTrades && krakenBook.recentTrades.length > 0 ? krakenBook.recentTrades : existing?.recentTrades || [],
+      };
+    }
+  }
+
+  return consolidated;
+}
+
 export function simulateTick(
-  prevMarkets: Record<string, OrderbookData>
+  prevMarkets: Record<string, OrderbookData>,
+  lockedSymbols: string[] = []
 ): Record<string, OrderbookData> {
   const updated: Record<string, OrderbookData> = {};
 
   for (const [symbol, book] of Object.entries(prevMarkets)) {
+    // Zero-drift lock: if this symbol is prioritized with live Kraken WS ticker data, do NOT mutate
+    if (lockedSymbols.includes(symbol)) {
+      updated[symbol] = book;
+      continue;
+    }
+
     // Stochastic micro-drift + mean-reversion
     const deltaPct = (Math.random() - 0.499) * 0.0018; // ~0.18% max jitter
     const newMid = Math.max(0.1, Math.round((book.lastPrice * (1 + deltaPct)) * 100) / 100);
@@ -270,7 +318,7 @@ export function recalculatePortfolio(
     };
   });
 
-  const baseCash = 500000;
+  const baseCash = typeof portfolio.cashUsd === 'number' ? portfolio.cashUsd : 0;
   const navUsd = Math.round((baseCash + portfolio.realizedPnl + unrealizedTotal) * 100) / 100;
   const grossLeverage = Math.round((totalAllocated / Math.max(navUsd, 1)) * 100) / 100;
   const netLeverage = Math.round((netExposure / Math.max(navUsd, 1)) * 100) / 100;
@@ -279,7 +327,7 @@ export function recalculatePortfolio(
   const currentDrawdownPct =
     peakNav > 0 ? Math.round((((peakNav - navUsd) / peakNav) * 100) * 100) / 100 : 0;
   const maxDrawdownPct = Math.max(portfolio.maxDrawdownPct || 0, currentDrawdownPct);
-  const dailyPnlPct = Math.round((((navUsd - baseCash) / baseCash) * 100) * 100) / 100;
+  const dailyPnlPct = peakNav > 0 ? Math.round((((navUsd - peakNav) / peakNav) * 100) * 100) / 100 : 0;
 
   // Cornish-Fisher VaR and CVaR estimation
   const estPortfolioDailyVol = 0.016; // 1.6% daily portfolio standard deviation
@@ -302,10 +350,10 @@ export function recalculatePortfolio(
   };
 }
 
-export function createInitialPortfolio(): PortfolioState {
+export function createInitialPortfolio(initialCapital: number = 100000): PortfolioState {
   return {
-    cashUsd: 500000,
-    navUsd: 500000,
+    cashUsd: initialCapital,
+    navUsd: initialCapital,
     grossLeverage: 0,
     netLeverage: 0,
     realizedPnl: 0,
@@ -313,42 +361,13 @@ export function createInitialPortfolio(): PortfolioState {
     totalTrades: 0,
     winningTrades: 0,
     losingTrades: 0,
-    peakNav: 500000,
+    peakNav: initialCapital,
     currentDrawdownPct: 0,
-    maxDrawdownPct: 0.42,
+    maxDrawdownPct: 0,
     dailyPnlPct: 0,
-    sharpeRatio: 2.82,
-    var99Usd: 8400,
-    cvar99Usd: 11200,
-    positions: [
-      {
-        symbol: 'BTC/USD',
-        direction: 'LONG',
-        quantity: 0.42,
-        entryPrice: 63800.0,
-        currentPrice: 64250.0,
-        unrealizedPnl: 189.0,
-        unrealizedPnlPct: 0.71,
-        allocatedUsd: 26800,
-        openedAt: Date.now() - 450000,
-        strategyId: 'strat_alpha_momentum',
-        stopLossPrice: 62205.0,
-        takeProfitPrice: 67309.0,
-      },
-      {
-        symbol: 'ETH/USD',
-        direction: 'SHORT',
-        quantity: 5.5,
-        entryPrice: 3512.0,
-        currentPrice: 3480.0,
-        unrealizedPnl: 176.0,
-        unrealizedPnlPct: 0.91,
-        allocatedUsd: 19140,
-        openedAt: Date.now() - 720000,
-        strategyId: 'strat_sigma_mean_reversion',
-        stopLossPrice: 3599.8,
-        takeProfitPrice: 3318.8,
-      },
-    ],
+    sharpeRatio: 0,
+    var99Usd: 0,
+    cvar99Usd: 0,
+    positions: [],
   };
 }

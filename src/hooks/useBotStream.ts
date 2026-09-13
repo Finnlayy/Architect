@@ -8,19 +8,19 @@ import { INITIAL_WORKER_BOTS } from '../data/workerBots';
  * connections from https:// origins. In that case, we seamlessly upgrade to the same-host secure
  * WebSocket endpoint (/api/v1/swarm/stream).
  */
-export function resolveBotWsUrl(targetUrl: string = 'ws://localhost:8000/api/v1/swarm/stream'): string {
+export function resolveBotWsUrl(targetUrl: string = ''): string {
   if (typeof window === 'undefined') {
+    return targetUrl || 'ws://localhost:3000/api/v1/swarm/stream';
+  }
+
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  // If targetUrl explicitly points to an external full WS URL that is not localhost, use it
+  if (targetUrl && !targetUrl.includes('localhost') && !targetUrl.includes('127.0.0.1')) {
     return targetUrl;
   }
 
-  const isHttps = window.location.protocol === 'https:';
-
-  // If in HTTPS sandbox and target is insecure localhost, upgrade to current host wss endpoint
-  if (isHttps && (targetUrl.startsWith('ws://localhost') || targetUrl.startsWith('ws://127.0.0.1'))) {
-    return `wss://${window.location.host}/api/v1/swarm/stream`;
-  }
-
-  return targetUrl;
+  // Otherwise, always route directly to the same host that served the application
+  return `${protocol}//${window.location.host}/api/v1/swarm/stream`;
 }
 
 /**
@@ -36,7 +36,7 @@ export function resolveBotWsUrl(targetUrl: string = 'ws://localhost:8000/api/v1/
  *   FastAPI-Port noch Cloud-WS erreichbar sind, sodass der Stream niemals einfriert.
  */
 export const useBotStream = (
-  wsUrl: string = 'ws://localhost:8000/api/v1/swarm/stream',
+  wsUrl: string = '',
   initialBots: WorkerBotData[] = INITIAL_WORKER_BOTS
 ) => {
   const [bots, setBots] = useState<WorkerBotData[]>(initialBots);
@@ -47,22 +47,33 @@ export const useBotStream = (
   const isWsConnectedRef = useRef<boolean>(false);
   const fallbackIntervalRef = useRef<number | null>(null);
 
-  // Sync if initialBots list changes from parent
+  // Sync if initialBots list changes from parent (e.g. live Kraken orderbook revaluation)
   useEffect(() => {
     if (initialBots && initialBots.length > 0) {
-      setBots((current) => {
-        const currentIds = new Set(current.map((b) => b.id));
-        const hasNew = initialBots.some((b) => !currentIds.has(b.id));
-        if (hasNew) {
-          const merged = [...current];
-          initialBots.forEach((b) => {
-            if (!currentIds.has(b.id)) {
-              merged.push(b);
-            }
-          });
-          return merged;
-        }
-        return current;
+      setBots((current: WorkerBotData[]) => {
+        const currentMap = new Map<string, WorkerBotData>(current.map((b) => [b.id, b]));
+        return initialBots.map((initBot: WorkerBotData) => {
+          const cur = currentMap.get(initBot.id);
+          if (!cur) return initBot;
+          return {
+            ...cur,
+            ...initBot,
+            // Strict Kraken WS Ticker Price Parity: Authoritative price from market engine takes precedence
+            currentPrice: initBot.currentPrice,
+            unrealizedPnL: initBot.unrealizedPnL || cur.unrealizedPnL,
+            unrealizedPnlUsd: initBot.unrealizedPnlUsd ?? cur.unrealizedPnlUsd,
+            unrealizedPnlPct: initBot.unrealizedPnlPct ?? cur.unrealizedPnlPct,
+            totalProfit: initBot.totalProfit ?? cur.totalProfit,
+            roi: initBot.roi ?? cur.roi,
+            metrics: {
+              ...cur.metrics,
+              ...initBot.metrics,
+            },
+            // Keep local active/paused status if explicitly toggled by user in UI
+            status: cur.status || initBot.status,
+            statusText: cur.statusText || initBot.statusText,
+          };
+        });
       });
     }
   }, [initialBots]);
@@ -145,8 +156,11 @@ export const useBotStream = (
     const resolvedUrl = resolveBotWsUrl(wsUrl);
 
     // Fallback Delta-Ticker: Erzeugt mikro-dynamische P&L- und Preis-Ticks,
-    // falls die externe Quant-Engine (z.B. lokaler FastAPI Port 8000) gerade verbindet.
+    // falls die externe Quant-Engine (z.B. lokaler FastAPI Port 8000) gerade verbindet
+    // UND keine übergeordnete Markt-Engine mit echten Kraken-WS-Ticks aktiv ist.
     const startFallbackTicker = () => {
+      // Wenn übergeordnete Kraken-Daten (initialBots) fließen, KEINE Drift simulieren!
+      if (initialBots && initialBots.length > 0) return;
       if (fallbackIntervalRef.current) return;
       fallbackIntervalRef.current = window.setInterval(() => {
         if (isWsConnectedRef.current) return; // Echtes WebSocket aktiv -> kein Fallback nötig
@@ -261,6 +275,38 @@ export const useBotStream = (
               // Bot aus dem Array filtern -> Verschwindet sofort aus dem UI
               console.log(`[Swarm WS] BOT_FINISHED empfangen: ${message.payload.id} (${message.payload.reason || 'TERMINATED'})`);
               setBots((current) => current.filter((bot) => bot.id !== message.payload.id));
+            } else if (message.type === 'BOT_ORDER_EXECUTED' && message.payload) {
+              const payload = message.payload;
+              console.log(`[Kraken CLI Hook] BOT_ORDER_EXECUTED for ${payload.botName}: ${payload.cliCommand} | TXID: ${payload.txid}`);
+              setBots((currentBots) =>
+                currentBots.map((bot) => {
+                  if (bot.id !== payload.botId) return bot;
+                  const newEntry = {
+                    command: payload.cliCommand,
+                    txid: payload.txid,
+                    status: 'FILLED' as const,
+                    timestamp: payload.timestamp || Date.now(),
+                    price: payload.price,
+                    volume: payload.volume,
+                    cost: payload.cost,
+                    side: payload.side,
+                  };
+                  const updatedHistory = [newEntry, ...(bot.cliExecutionHistory || [])].slice(0, 20);
+
+                  return {
+                    ...bot,
+                    currentPrice: payload.price || bot.currentPrice,
+                    metrics: {
+                      ...bot.metrics,
+                      dcaOrdersTriggered: payload.dcaOrdersTriggered || (bot.metrics?.dcaOrdersTriggered || 0) + 1,
+                    },
+                    lastCliExecution: newEntry,
+                    cliExecutionHistory: updatedHistory,
+                    lastUpdate: new Date(),
+                    lastUpdated: new Date().toTimeString().split(' ')[0],
+                  };
+                })
+              );
             } else if (message.type === 'SYNC_ALL_BOTS' && Array.isArray(message.payload)) {
               setBots(message.payload);
             }
@@ -321,6 +367,38 @@ export const useBotStream = (
     };
   }, [wsUrl]);
 
+  const triggerBotCliOrder = useCallback(
+    async (
+      botId: string,
+      options?: { side?: 'buy' | 'sell'; price?: number; volume?: number; reason?: string }
+    ) => {
+      const targetBot = bots.find((b) => b.id === botId);
+      if (!targetBot) return null;
+
+      try {
+        const res = await fetch('/api/kraken/cli/bot-order', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            botId,
+            botName: targetBot.name,
+            pair: targetBot.krakenPair || targetBot.pair,
+            side: options?.side || 'buy',
+            price: options?.price || targetBot.currentPrice,
+            volume: options?.volume || 0.01,
+            reason: options?.reason || 'User Manual Tranche Dispatch',
+          }),
+        });
+        const data = await res.json();
+        return data;
+      } catch (err) {
+        console.error('[useBotStream] triggerBotCliOrder error:', err);
+        throw err;
+      }
+    },
+    [bots]
+  );
+
   // Methoden zur bidirektionalen Steuerung auf dem Bot-Array hinterlegen
   // (ermöglicht sowohl direktes liveBots.map(...) als auch const [liveBots, sendCommand] = useBotStream(...))
   const streamResult = [...bots] as any;
@@ -328,6 +406,7 @@ export const useBotStream = (
     toggleBotStatus,
     stopWorkerBot,
     sendCommand,
+    triggerBotCliOrder,
   });
 
   streamResult[Symbol.iterator] = function* () {
@@ -335,6 +414,7 @@ export const useBotStream = (
     yield sendCommand;
     yield toggleBotStatus;
     yield stopWorkerBot;
+    yield triggerBotCliOrder;
   };
 
   return streamResult;

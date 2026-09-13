@@ -4,31 +4,31 @@ export const INITIAL_WORKER_BOTS: WorkerBotData[] = [
   {
     id: 'BOT-7742',
     name: 'DCA Bot Alpha',
-    exchange: 'Pionex Futures',
+    exchange: 'Kraken Futures',
     status: 'active',
-    pair: 'HYPE/USDT.P',
-    strategy: 'PERPETUAL FUTURES · DCA STRATEGY',
+    pair: 'BTC/USD',
+    strategy: 'KRAKEN FUTURES · DCA STRATEGY',
     direction: 'LONG',
     leverage: 75,
     unrealizedPnL: {
-      value: 12.84,
-      percentage: 25.38,
+      value: 162.24,
+      percentage: 216.58,
     },
-    entryPrice: 41.250,
-    currentPrice: 43.120,
+    entryPrice: 75400.0,
+    currentPrice: 76767.0,
     metrics: {
-      investment: 50.58,
+      investment: 500.0,
       currency: '$',
-      investmentEur: 45.00,
-      realizedProfit: 8.42,
+      investmentEur: 460.0,
+      realizedProfit: 84.2,
       profitCycleType: 'Realisiert (Zyklus)',
-      dcaRangeMin: 39,
-      dcaRangeMax: 44,
+      dcaRangeMin: 72000,
+      dcaRangeMax: 82000,
       dcaSteps: 160,
       dcaOrdersTriggered: 247,
       fundingFees: -1.14,
-      liquidationPrice: 41.15,
-      liquidationDistancePct: -0.83,
+      liquidationPrice: 68500.0,
+      liquidationDistancePct: -11.7,
     },
     runtime: {
       days: 3,
@@ -37,21 +37,21 @@ export const INITIAL_WORKER_BOTS: WorkerBotData[] = [
       cycles: 62,
       cycleProgressPct: 62,
     },
-    totalProfit: 21.26,
-    roi: 42.05,
+    totalProfit: 170.66,
+    roi: 337.4,
     apr: 4480,
     lastUpdate: '14:37:02',
     statusText: 'Bot aktiv · Verbunden',
     // Convenience aliases
-    symbol: 'HYPE/USDT.P',
-    instrumentType: 'PERPETUAL FUTURES · DCA STRATEGY',
-    investmentUsd: 50.58,
-    investmentEur: 45.00,
-    unrealizedPnlUsd: 12.84,
-    unrealizedPnlPct: 25.38,
-    currentProfitUsd: 8.42,
-    totalProfitUsd: 21.26,
-    roiPct: 42.05,
+    symbol: 'BTC/USD',
+    instrumentType: 'KRAKEN FUTURES · DCA STRATEGY',
+    investmentUsd: 500.0,
+    investmentEur: 460.0,
+    unrealizedPnlUsd: 162.24,
+    unrealizedPnlPct: 216.58,
+    currentProfitUsd: 84.2,
+    totalProfitUsd: 170.66,
+    roiPct: 337.4,
     aprPct: 4480,
     dcaOrdersTriggered: 247,
     lastUpdated: '14:37:02',
@@ -59,31 +59,31 @@ export const INITIAL_WORKER_BOTS: WorkerBotData[] = [
   {
     id: 'BOT-9104',
     name: 'Alpha-Momentum Worker',
-    exchange: 'Hyperliquid L2',
+    exchange: 'Kraken Futures (PF_XBTUSD)',
     status: 'active',
-    pair: 'BTC/USDT.P',
-    strategy: 'PERPETUAL FUTURES · MOMENTUM DCA',
+    pair: 'BTC/USD',
+    strategy: 'KRAKEN FUTURES · MOMENTUM DCA',
     direction: 'LONG',
     leverage: 25,
     unrealizedPnL: {
-      value: 184.20,
-      percentage: 18.45,
+      value: 520.84,
+      percentage: 52.08,
     },
-    entryPrice: 63200.0,
-    currentPrice: 64250.0,
+    entryPrice: 75200.0,
+    currentPrice: 76767.0,
     metrics: {
       investment: 1000.0,
       currency: '$',
       investmentEur: 915.0,
-      realizedProfit: 74.50,
+      realizedProfit: 74.5,
       profitCycleType: 'Realisiert (Zyklus)',
-      dcaRangeMin: 62000,
-      dcaRangeMax: 66000,
+      dcaRangeMin: 74000,
+      dcaRangeMax: 79000,
       dcaSteps: 120,
       dcaOrdersTriggered: 89,
       fundingFees: -6.32,
-      liquidationPrice: 61500.0,
-      liquidationDistancePct: -4.28,
+      liquidationPrice: 71500.0,
+      liquidationDistancePct: -6.86,
     },
     runtime: {
       days: 7,
@@ -92,21 +92,21 @@ export const INITIAL_WORKER_BOTS: WorkerBotData[] = [
       cycles: 45,
       cycleProgressPct: 78,
     },
-    totalProfit: 312.40,
-    roi: 31.24,
+    totalProfit: 595.34,
+    roi: 59.53,
     apr: 1628,
     lastUpdate: '14:37:02',
     statusText: 'Bot aktiv · Verbunden',
     linkedStrategyId: 'strat_alpha_momentum',
-    symbol: 'BTC/USDT.P',
-    instrumentType: 'PERPETUAL FUTURES · MOMENTUM DCA',
+    symbol: 'BTC/USD',
+    instrumentType: 'KRAKEN FUTURES · MOMENTUM DCA',
     investmentUsd: 1000.0,
     investmentEur: 915.0,
-    unrealizedPnlUsd: 184.20,
-    unrealizedPnlPct: 18.45,
-    currentProfitUsd: 74.50,
-    totalProfitUsd: 312.40,
-    roiPct: 31.24,
+    unrealizedPnlUsd: 520.84,
+    unrealizedPnlPct: 52.08,
+    currentProfitUsd: 74.5,
+    totalProfitUsd: 595.34,
+    roiPct: 59.53,
     aprPct: 1628,
     dcaOrdersTriggered: 89,
     lastUpdated: '14:37:02',
@@ -114,31 +114,31 @@ export const INITIAL_WORKER_BOTS: WorkerBotData[] = [
   {
     id: 'BOT-3382',
     name: 'Sigma Mean-Reversion Bot',
-    exchange: 'dYdX v4',
+    exchange: 'Kraken Futures (PF_ETHUSD)',
     status: 'active',
-    pair: 'ETH/USDT.P',
-    strategy: 'PERPETUAL FUTURES · GRID-DCA',
+    pair: 'ETH/USD',
+    strategy: 'KRAKEN FUTURES · GRID-DCA',
     direction: 'LONG',
     leverage: 50,
     unrealizedPnL: {
-      value: 46.10,
-      percentage: 15.30,
+      value: 227.46,
+      percentage: 75.82,
     },
-    entryPrice: 3420.0,
-    currentPrice: 3480.0,
+    entryPrice: 2440.0,
+    currentPrice: 2477.0,
     metrics: {
       investment: 300.0,
       currency: '$',
       investmentEur: 274.5,
-      realizedProfit: 28.90,
+      realizedProfit: 28.9,
       profitCycleType: 'Realisiert (Zyklus)',
-      dcaRangeMin: 3300,
-      dcaRangeMax: 3600,
+      dcaRangeMin: 2350,
+      dcaRangeMax: 2600,
       dcaSteps: 80,
       dcaOrdersTriggered: 112,
-      fundingFees: -2.40,
-      liquidationPrice: 3350.0,
-      liquidationDistancePct: -3.73,
+      fundingFees: -2.4,
+      liquidationPrice: 2280.0,
+      liquidationDistancePct: -7.95,
     },
     runtime: {
       days: 5,
@@ -147,21 +147,21 @@ export const INITIAL_WORKER_BOTS: WorkerBotData[] = [
       cycles: 38,
       cycleProgressPct: 54,
     },
-    totalProfit: 92.40,
-    roi: 30.80,
+    totalProfit: 256.36,
+    roi: 85.45,
     apr: 2250,
     lastUpdate: '14:37:02',
     statusText: 'Bot aktiv · Verbunden',
     linkedStrategyId: 'strat_sigma_mean_reversion',
-    symbol: 'ETH/USDT.P',
-    instrumentType: 'PERPETUAL FUTURES · GRID-DCA',
+    symbol: 'ETH/USD',
+    instrumentType: 'KRAKEN FUTURES · GRID-DCA',
     investmentUsd: 300.0,
     investmentEur: 274.5,
-    unrealizedPnlUsd: 46.10,
-    unrealizedPnlPct: 15.30,
-    currentProfitUsd: 28.90,
-    totalProfitUsd: 92.40,
-    roiPct: 30.80,
+    unrealizedPnlUsd: 227.46,
+    unrealizedPnlPct: 75.82,
+    currentProfitUsd: 28.9,
+    totalProfitUsd: 256.36,
+    roiPct: 85.45,
     aprPct: 2250,
     dcaOrdersTriggered: 112,
     lastUpdated: '14:37:02',
@@ -169,31 +169,31 @@ export const INITIAL_WORKER_BOTS: WorkerBotData[] = [
   {
     id: 'BOT-5519',
     name: 'Deep-RL Arbitrage Bot',
-    exchange: 'Binance Futures',
+    exchange: 'Kraken Futures (PF_SOLUSD)',
     status: 'active',
-    pair: 'SOL/USDT.P',
-    strategy: 'PERPETUAL FUTURES · ADAPTIVE DCA',
+    pair: 'SOL/USD',
+    strategy: 'KRAKEN FUTURES · ADAPTIVE DCA',
     direction: 'LONG',
     leverage: 20,
     unrealizedPnL: {
-      value: 38.40,
-      percentage: 19.20,
+      value: 90.26,
+      percentage: 45.13,
     },
-    entryPrice: 142.0,
-    currentPrice: 148.5,
+    entryPrice: 97.5,
+    currentPrice: 99.7,
     metrics: {
       investment: 200.0,
       currency: '$',
       investmentEur: 183.0,
-      realizedProfit: 19.80,
+      realizedProfit: 19.8,
       profitCycleType: 'Realisiert (Zyklus)',
-      dcaRangeMin: 135,
-      dcaRangeMax: 155,
+      dcaRangeMin: 92,
+      dcaRangeMax: 108,
       dcaSteps: 100,
       dcaOrdersTriggered: 64,
       fundingFees: -1.85,
-      liquidationPrice: 138.0,
-      liquidationDistancePct: -7.07,
+      liquidationPrice: 88.5,
+      liquidationDistancePct: -11.23,
     },
     runtime: {
       days: 2,
@@ -202,21 +202,21 @@ export const INITIAL_WORKER_BOTS: WorkerBotData[] = [
       cycles: 19,
       cycleProgressPct: 82,
     },
-    totalProfit: 58.20,
-    roi: 29.10,
+    totalProfit: 110.06,
+    roi: 55.03,
     apr: 4910,
     lastUpdate: '14:37:02',
     statusText: 'Bot aktiv · Verbunden',
     linkedStrategyId: 'strat_deep_rl',
-    symbol: 'SOL/USDT.P',
-    instrumentType: 'PERPETUAL FUTURES · ADAPTIVE DCA',
+    symbol: 'SOL/USD',
+    instrumentType: 'KRAKEN FUTURES · ADAPTIVE DCA',
     investmentUsd: 200.0,
     investmentEur: 183.0,
-    unrealizedPnlUsd: 38.40,
-    unrealizedPnlPct: 19.20,
-    currentProfitUsd: 19.80,
-    totalProfitUsd: 58.20,
-    roiPct: 29.10,
+    unrealizedPnlUsd: 90.26,
+    unrealizedPnlPct: 45.13,
+    currentProfitUsd: 19.8,
+    totalProfitUsd: 110.06,
+    roiPct: 55.03,
     aprPct: 4910,
     dcaOrdersTriggered: 64,
     lastUpdated: '14:37:02',
@@ -224,30 +224,30 @@ export const INITIAL_WORKER_BOTS: WorkerBotData[] = [
   {
     id: 'BOT-1083',
     name: 'Microstructure Scalp Bot',
-    exchange: 'Bybit Linear',
+    exchange: 'Kraken Spot / Margin',
     status: 'active',
-    pair: 'NIO/USDT.P',
-    strategy: 'PERPETUAL FUTURES · L2 ORDERBOOK DCA',
+    pair: 'BTC/USD',
+    strategy: 'KRAKEN SPOT · L2 ORDERBOOK DCA',
     direction: 'LONG',
     leverage: 10,
     unrealizedPnL: {
-      value: 9.20,
-      percentage: 12.50,
+      value: 24.07,
+      percentage: 30.09,
     },
-    entryPrice: 5.650,
-    currentPrice: 5.820,
+    entryPrice: 75900.0,
+    currentPrice: 76767.0,
     metrics: {
-      investment: 80.0,
+      investment: 800.0,
       currency: '$',
-      investmentEur: 73.2,
-      realizedProfit: 6.15,
+      investmentEur: 732.0,
+      realizedProfit: 61.5,
       profitCycleType: 'Realisiert (Zyklus)',
-      dcaRangeMin: 5.20,
-      dcaRangeMax: 6.20,
+      dcaRangeMin: 73000,
+      dcaRangeMax: 80000,
       dcaSteps: 50,
       dcaOrdersTriggered: 38,
       fundingFees: -0.45,
-      liquidationPrice: 5.25,
+      liquidationPrice: 69000.0,
       liquidationDistancePct: -9.79,
     },
     runtime: {
@@ -257,21 +257,21 @@ export const INITIAL_WORKER_BOTS: WorkerBotData[] = [
       cycles: 12,
       cycleProgressPct: 40,
     },
-    totalProfit: 15.80,
-    roi: 19.75,
+    totalProfit: 30.22,
+    roi: 37.78,
     apr: 650,
     lastUpdate: '14:37:02',
     statusText: 'Bot aktiv · Verbunden',
     linkedStrategyId: 'strat_orderbook_microstructure',
-    symbol: 'NIO/USDT.P',
-    instrumentType: 'PERPETUAL FUTURES · L2 ORDERBOOK DCA',
-    investmentUsd: 80.0,
-    investmentEur: 73.2,
-    unrealizedPnlUsd: 9.20,
-    unrealizedPnlPct: 12.50,
-    currentProfitUsd: 6.15,
-    totalProfitUsd: 15.80,
-    roiPct: 19.75,
+    symbol: 'BTC/USD',
+    instrumentType: 'KRAKEN SPOT · L2 ORDERBOOK DCA',
+    investmentUsd: 800.0,
+    investmentEur: 732.0,
+    unrealizedPnlUsd: 24.07,
+    unrealizedPnlPct: 30.09,
+    currentProfitUsd: 61.5,
+    totalProfitUsd: 30.22,
+    roiPct: 37.78,
     aprPct: 650,
     dcaOrdersTriggered: 38,
     lastUpdated: '14:37:02',
@@ -279,31 +279,31 @@ export const INITIAL_WORKER_BOTS: WorkerBotData[] = [
   {
     id: 'BOT-6621',
     name: 'Gamma Hedging Worker',
-    exchange: 'Deribit Direct',
+    exchange: 'Kraken Derivatives / Futures',
     status: 'active',
-    pair: 'ETH/USDT.P',
-    strategy: 'PERPETUAL FUTURES · SHORT DELTA HEDGE',
+    pair: 'ETH/USD',
+    strategy: 'KRAKEN FUTURES · SHORT DELTA HEDGE',
     direction: 'SHORT',
     leverage: 20,
     unrealizedPnL: {
-      value: 24.50,
-      percentage: 16.33,
+      value: 39.44,
+      percentage: 26.29,
     },
-    entryPrice: 3510.0,
-    currentPrice: 3480.0,
+    entryPrice: 2510.0,
+    currentPrice: 2477.0,
     metrics: {
       investment: 150.0,
       currency: '$',
       investmentEur: 137.25,
-      realizedProfit: 14.20,
+      realizedProfit: 14.2,
       profitCycleType: 'Realisiert (Zyklus)',
-      dcaRangeMin: 3400,
-      dcaRangeMax: 3600,
+      dcaRangeMin: 2400,
+      dcaRangeMax: 2600,
       dcaSteps: 60,
       dcaOrdersTriggered: 42,
       fundingFees: 1.85,
-      liquidationPrice: 3685.0,
-      liquidationDistancePct: 5.89,
+      liquidationPrice: 2650.0,
+      liquidationDistancePct: 6.98,
     },
     runtime: {
       days: 4,
@@ -312,20 +312,20 @@ export const INITIAL_WORKER_BOTS: WorkerBotData[] = [
       cycles: 28,
       cycleProgressPct: 68,
     },
-    totalProfit: 38.70,
-    roi: 25.80,
+    totalProfit: 53.64,
+    roi: 35.76,
     apr: 1940,
     lastUpdate: '14:37:02',
     statusText: 'Bot aktiv · Verbunden',
-    symbol: 'ETH/USDT.P',
-    instrumentType: 'PERPETUAL FUTURES · SHORT DELTA HEDGE',
+    symbol: 'ETH/USD',
+    instrumentType: 'KRAKEN FUTURES · SHORT DELTA HEDGE',
     investmentUsd: 150.0,
     investmentEur: 137.25,
-    unrealizedPnlUsd: 24.50,
-    unrealizedPnlPct: 16.33,
-    currentProfitUsd: 14.20,
-    totalProfitUsd: 38.70,
-    roiPct: 25.80,
+    unrealizedPnlUsd: 39.44,
+    unrealizedPnlPct: 26.29,
+    currentProfitUsd: 14.2,
+    totalProfitUsd: 53.64,
+    roiPct: 35.76,
     aprPct: 1940,
     dcaOrdersTriggered: 42,
     lastUpdated: '14:37:02',
@@ -333,7 +333,67 @@ export const INITIAL_WORKER_BOTS: WorkerBotData[] = [
 ];
 
 /**
+ * Helper: Strict Kraken Exchange Identity Normalizer
+ * Completely purges all third-party exchange references (Pionix, Pionex, Bybit, Binance, etc.)
+ * and canonicalizes the bot to native Kraken venues (Kraken Futures, Kraken Spot / Margin, Kraken Derivatives).
+ */
+export function normalizeToKrakenExchangeIdentity(bot: WorkerBotData): WorkerBotData {
+  let exchange = (bot.exchange || '').trim();
+  const rawPair = bot.pair || bot.symbol || 'BTC/USD';
+
+  // 1. Purge third-party labels and map to canonical Kraken venue
+  const hasKraken = exchange.toLowerCase().includes('kraken');
+  if (!hasKraken || exchange === '') {
+    if (bot.id === 'BOT-7742') {
+      exchange = 'Kraken Futures';
+    } else if (bot.id === 'BOT-9104') {
+      exchange = 'Kraken Futures (PF_XBTUSD)';
+    } else if (bot.id === 'BOT-3382') {
+      exchange = 'Kraken Futures (PF_ETHUSD)';
+    } else if (bot.id === 'BOT-5519') {
+      exchange = 'Kraken Futures (PF_SOLUSD)';
+    } else if (bot.id === 'BOT-1083') {
+      exchange = 'Kraken Spot / Margin';
+    } else if (bot.id === 'BOT-6621') {
+      exchange = 'Kraken Derivatives / Futures';
+    } else if (rawPair.includes('ETH')) {
+      exchange = 'Kraken Futures (PF_ETHUSD)';
+    } else if (rawPair.includes('SOL')) {
+      exchange = 'Kraken Futures (PF_SOLUSD)';
+    } else {
+      exchange = 'Kraken Futures';
+    }
+  }
+
+  // 2. Canonicalize trading pair (convert any legacy USDT.P or synthetic suffix to USD)
+  let canonicalPair = rawPair;
+  if (canonicalPair.includes('USDT.P') || canonicalPair.includes('USDT')) {
+    canonicalPair = canonicalPair.replace('USDT.P', 'USD').replace('USDT', 'USD');
+  }
+
+  // 3. Canonicalize strategy / instrument type labels
+  let strategy = bot.strategy || bot.instrumentType || 'KRAKEN FUTURES · DCA STRATEGY';
+  if (/pion[ei]x|bybit|binance|dydx|hyperliquid/i.test(strategy)) {
+    strategy = strategy.replace(/pion[ei]x|bybit|binance|dydx|hyperliquid/gi, 'KRAKEN');
+  }
+  if (!strategy.toUpperCase().includes('KRAKEN')) {
+    strategy = `KRAKEN FUTURES · ${strategy}`;
+  }
+
+  return {
+    ...bot,
+    exchange,
+    pair: canonicalPair,
+    symbol: canonicalPair,
+    krakenPair: canonicalPair,
+    strategy,
+    instrumentType: strategy,
+  };
+}
+
+/**
  * Revaluates established worker bots against real-time orderbook ticks
+ * with strict Kraken exchange identity enforcement and zero-latency price parity.
  */
 export function updateWorkerBotsWithMarket(
   bots: WorkerBotData[],
@@ -342,40 +402,56 @@ export function updateWorkerBotsWithMarket(
   const now = new Date();
   const timeStr = now.toTimeString().split(' ')[0];
 
-  return bots.map((bot) => {
-    const pair = bot.pair || bot.symbol || 'BTC/USDT.P';
+  return bots.map((rawBot) => {
+    // Enforce strict Kraken venue identity and canonical pair
+    const bot = normalizeToKrakenExchangeIdentity(rawBot);
+    const pair = bot.pair || 'BTC/USD';
 
-    // Lookup matching book: e.g. HYPE/USDT.P -> HYPE/USD
-    let bookSymbol = 'HYPE/USD';
-    if (pair.startsWith('BTC')) bookSymbol = 'BTC/USD';
-    else if (pair.startsWith('ETH')) bookSymbol = 'ETH/USD';
-    else if (pair.startsWith('SOL')) bookSymbol = 'SOL/USD';
-    else if (pair.startsWith('NIO')) bookSymbol = 'NIO/USD';
+    // Strict Kraken WS Ticker matching: Direct lookup or canonical mapping
+    let bookSymbol = 'BTC/USD';
+    if (markets[pair]) {
+      bookSymbol = pair;
+    } else if (pair.includes('ETH')) {
+      bookSymbol = 'ETH/USD';
+    } else if (pair.includes('SOL')) {
+      bookSymbol = 'SOL/USD';
+    } else if (pair.includes('BTC') || pair.includes('XBT')) {
+      bookSymbol = 'BTC/USD';
+    } else if (pair.includes('HYPE')) {
+      bookSymbol = 'HYPE/USD';
+    } else if (pair.includes('NIO')) {
+      bookSymbol = 'NIO/USD';
+    }
 
     const book = markets[bookSymbol];
-    if (!book) return bot;
+    if (!book || typeof book.lastPrice !== 'number' || book.lastPrice <= 0) {
+      return bot;
+    }
 
     const currentPrice = book.lastPrice;
-    const priceDiff = currentPrice - bot.entryPrice;
+    const entryPrice = bot.entryPrice > 0 ? bot.entryPrice : currentPrice;
+    const priceDiff = currentPrice - entryPrice;
     const directionMultiplier = bot.direction === 'LONG' ? 1 : -1;
 
     // Position nominal value
     const investment = bot.metrics?.investment ?? bot.investmentUsd ?? 100;
-    const positionNominal = investment * bot.leverage;
-    const pnlRatio = (priceDiff / bot.entryPrice) * directionMultiplier;
+    const leverage = bot.leverage > 0 ? bot.leverage : 1;
+    const positionNominal = investment * leverage;
+    const pnlRatio = entryPrice > 0 ? (priceDiff / entryPrice) * directionMultiplier : 0;
     const unrealizedValue = Math.round(positionNominal * pnlRatio * 100) / 100;
-    const unrealizedPct = Math.round(pnlRatio * bot.leverage * 10000) / 100;
+    const unrealizedPct = Math.round(pnlRatio * leverage * 10000) / 100;
 
     const realizedProfit = bot.metrics?.realizedProfit ?? bot.currentProfitUsd ?? 0;
     const totalProfit = Math.round((realizedProfit + unrealizedValue) * 100) / 100;
-    const roi = Math.round((totalProfit / investment) * 10000) / 100;
+    const roi = investment > 0 ? Math.round((totalProfit / investment) * 10000) / 100 : 0;
 
     // Liquidation distance
-    const liqPrice = bot.metrics?.liquidationPrice ?? currentPrice * 0.95;
-    const liqDist = Math.round(((liqPrice - currentPrice) / currentPrice) * 10000) / 100;
+    const liqPrice = bot.metrics?.liquidationPrice ?? (bot.direction === 'LONG' ? currentPrice * 0.92 : currentPrice * 1.08);
+    const liqDist = currentPrice > 0 ? Math.round(((liqPrice - currentPrice) / currentPrice) * 10000) / 100 : 0;
 
     const updatedMetrics = {
       ...bot.metrics,
+      liquidationPrice: liqPrice,
       liquidationDistancePct: liqDist,
     };
 

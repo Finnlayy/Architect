@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Wallet,
   TrendingUp,
@@ -11,8 +11,13 @@ import {
   ArrowDownRight,
   BarChart,
   ShieldAlert,
+  Terminal,
+  CheckCircle,
 } from 'lucide-react';
 import { PortfolioState, Position, ExecutionOrder } from '../types/trading';
+import { fetchKrakenAccountSummary } from '../services/krakenCliRouter';
+import { fetchAuthoritativeBalance, AuthoritativeBalancePayload } from '../services/krakenCliProxyRegistry';
+import { KrakenAccountSummary } from '../types/krakenCli';
 
 interface PortfolioViewProps {
   portfolio: PortfolioState;
@@ -28,12 +33,32 @@ export const PortfolioView: React.FC<PortfolioViewProps> = ({
   equityHistory,
 }) => {
   const [selectedSymbol, setSelectedSymbol] = useState<string | null>(null);
+  const [krakenSummary, setKrakenSummary] = useState<KrakenAccountSummary | null>(null);
+  const [authoritative, setAuthoritative] = useState<AuthoritativeBalancePayload | null>(null);
 
-  // SVG Equity Curve Calculation
-  const navValues = equityHistory.map((e) => e.nav);
-  const minNav = Math.min(...navValues, 495000);
-  const maxNav = Math.max(...navValues, 505000);
-  const navRange = Math.max(maxNav - minNav, 100);
+  useEffect(() => {
+    const loadAuthoritative = () => {
+      fetchKrakenAccountSummary()
+        .then((data) => setKrakenSummary(data))
+        .catch((err) => console.warn('PortfolioView: Kraken CLI Summary Sync:', err));
+
+      fetchAuthoritativeBalance()
+        .then((data) => setAuthoritative(data))
+        .catch((err) => console.warn('PortfolioView: Authoritative Balance Sync:', err));
+    };
+
+    loadAuthoritative();
+    const interval = setInterval(loadAuthoritative, 6000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // SVG Equity Curve Calculation dynamically bound to actual CLI NAV
+  const navValues = equityHistory.length > 0 ? equityHistory.map((e) => e.nav) : [portfolio.navUsd];
+  const computedMin = Math.min(...navValues);
+  const computedMax = Math.max(...navValues);
+  const minNav = computedMin === computedMax ? computedMin * 0.995 : computedMin;
+  const maxNav = computedMin === computedMax ? computedMax * 1.005 : computedMax;
+  const navRange = Math.max(maxNav - minNav, 1);
 
   const svgWidth = 600;
   const svgHeight = 120;
@@ -46,8 +71,113 @@ export const PortfolioView: React.FC<PortfolioViewProps> = ({
     })
     .join(' ');
 
+  const isPaper = authoritative?.mode === 'paper' || krakenSummary?.mode === 'paper';
+
   return (
     <div className="space-y-4">
+      {/* Kraken CLI Verified External Balance Card */}
+      {(krakenSummary || authoritative) && (
+        <div className="bg-slate-900 border border-slate-800 rounded-lg p-3.5 font-mono text-xs">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-800 pb-2.5 mb-2.5">
+            <div className="flex items-center gap-2">
+              <Terminal className="w-4 h-4 text-amber-400" />
+              <span className="font-bold text-slate-200">
+                {isPaper
+                  ? 'Kraken CLI Paper Ledger Verified (`kraken paper status`)'
+                  : 'Kraken CLI Account Balances & Margin Verified (`kraken balance & trade-balance`)'}
+              </span>
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 flex items-center gap-1">
+                <CheckCircle className="w-3 h-3" />
+                CLI ROUTED
+              </span>
+            </div>
+            <div className="text-[11px] text-slate-400">
+              Source: <span className="text-amber-400">{authoritative?.sourceOfTruth || (isPaper ? 'kraken paper status' : 'kraken balance')}</span> · Mode: <span className="text-emerald-400 uppercase">{authoritative?.mode || (isPaper ? 'paper' : 'live')}</span>
+            </div>
+          </div>
+
+          {isPaper ? (
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 text-[11px]">
+              <div className="bg-slate-950/60 p-2 rounded border border-slate-800/60">
+                <span className="text-slate-500 block text-[10px]">PAPER CASH</span>
+                <span className="text-slate-200 font-bold block mt-0.5">
+                  ${(authoritative?.cashUsd ?? portfolio.cashUsd).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </span>
+              </div>
+              <div className="bg-slate-950/60 p-2 rounded border border-slate-800/60">
+                <span className="text-slate-500 block text-[10px]">PAPER NAV (VALUE)</span>
+                <span className="text-emerald-400 font-bold block mt-0.5">
+                  ${(authoritative?.navUsd ?? portfolio.navUsd).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </span>
+              </div>
+              <div className="bg-slate-950/60 p-2 rounded border border-slate-800/60">
+                <span className="text-slate-500 block text-[10px]">REALIZED PnL</span>
+                <span className={`font-bold block mt-0.5 ${(authoritative?.realizedPnl ?? portfolio.realizedPnl) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                  ${(authoritative?.realizedPnl ?? portfolio.realizedPnl).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </span>
+              </div>
+              <div className="bg-slate-950/60 p-2 rounded border border-slate-800/60">
+                <span className="text-slate-500 block text-[10px]">UNREALIZED PnL</span>
+                <span className={`font-bold block mt-0.5 ${(authoritative?.unrealizedPnl ?? portfolio.unrealizedPnl) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                  ${(authoritative?.unrealizedPnl ?? portfolio.unrealizedPnl).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </span>
+              </div>
+              <div className="bg-slate-950/60 p-2 rounded border border-slate-800/60">
+                <span className="text-slate-500 block text-[10px]">OPEN POSITIONS</span>
+                <span className="text-cyan-400 font-bold block mt-0.5">
+                  {authoritative?.positions?.length ?? portfolio.positions.length} Active
+                </span>
+              </div>
+              <div className="bg-slate-950/60 p-2 rounded border border-slate-800/60">
+                <span className="text-slate-500 block text-[10px]">CLI TRADES COUNT</span>
+                <span className="text-slate-200 font-bold block mt-0.5">
+                  {authoritative?.tradesCount ?? portfolio.totalTrades} Executed
+                </span>
+              </div>
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-2 text-[11px]">
+              <div className="bg-slate-950/60 p-2 rounded border border-slate-800/60">
+                <span className="text-slate-500 block text-[10px]">USD CASH</span>
+                <span className="text-slate-200 font-bold block mt-0.5">
+                  ${(authoritative?.liveBalances?.ZUSD?.balance ?? krakenSummary?.balances.ZUSD?.balance ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                </span>
+              </div>
+              <div className="bg-slate-950/60 p-2 rounded border border-slate-800/60">
+                <span className="text-slate-500 block text-[10px]">USDT LIQUIDITY</span>
+                <span className="text-slate-200 font-bold block mt-0.5">
+                  ${(authoritative?.liveBalances?.USDT?.balance ?? krakenSummary?.balances.USDT?.balance ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                </span>
+              </div>
+              <div className="bg-slate-950/60 p-2 rounded border border-slate-800/60">
+                <span className="text-slate-500 block text-[10px]">BTC COLD/SPOT</span>
+                <span className="text-slate-200 font-bold block mt-0.5">
+                  {(authoritative?.liveBalances?.XXBT?.balance ?? krakenSummary?.balances.XXBT?.balance ?? 0)} BTC
+                </span>
+              </div>
+              <div className="bg-slate-950/60 p-2 rounded border border-slate-800/60">
+                <span className="text-slate-500 block text-[10px]">ETH HOLDINGS</span>
+                <span className="text-slate-200 font-bold block mt-0.5">
+                  {(authoritative?.liveBalances?.XETH?.balance ?? krakenSummary?.balances.XETH?.balance ?? 0)} ETH
+                </span>
+              </div>
+              <div className="bg-slate-950/60 p-2 rounded border border-slate-800/60">
+                <span className="text-slate-500 block text-[10px]">TOTAL MARGIN EQUITY</span>
+                <span className="text-emerald-400 font-bold block mt-0.5">
+                  ${(authoritative?.tradeBalance?.equity ?? krakenSummary?.trade_balance?.equity ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                </span>
+              </div>
+              <div className="bg-slate-950/60 p-2 rounded border border-slate-800/60">
+                <span className="text-slate-500 block text-[10px]">FREE MARGIN</span>
+                <span className="text-emerald-400 font-bold block mt-0.5">
+                  ${(authoritative?.tradeBalance?.free_margin ?? krakenSummary?.trade_balance?.free_margin ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                </span>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* High-Level Risk & Balance Metrics */}
       <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
         <div className="bg-slate-900 border border-slate-800 p-3 rounded-lg">

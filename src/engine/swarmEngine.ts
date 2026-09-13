@@ -2,10 +2,15 @@ import { RawSignal, StrategyAgent, OrderbookData } from '../types/trading';
 
 let signalCounter = 1000;
 
+/**
+ * Generates Swarm hypotheses with suggestedSizeUsd strictly calculated from the authoritative Kraken balance navUsd.
+ * Internal or simulated portfolio state is strictly prohibited from dictating position sizing.
+ */
 export function generateSwarmSignals(
   strategies: StrategyAgent[],
   marketData: Record<string, OrderbookData>,
-  currentTick: number
+  currentTick: number,
+  authoritativeNavUsd: number
 ): RawSignal[] {
   const signals: RawSignal[] = [];
   const symbols = Object.keys(marketData);
@@ -80,8 +85,13 @@ export function generateSwarmSignals(
           }
         }
 
-        // Suggested base size: $10,000 to $40,000 based on strategy weight and confidence
-        const suggestedSizeUsd = Math.round((strategy.weight * 60000 + confidence * 15000) / 100) * 100;
+        // Dynamic position sizing derived exclusively from authoritative CLI capital (kraken paper status / kraken balance)
+        const capitalBase = authoritativeNavUsd && authoritativeNavUsd > 0 ? authoritativeNavUsd : 100000;
+        const targetTranche = capitalBase * 0.12; // 12% target tranche allocation
+        const suggestedSizeUsd = Math.max(
+          500,
+          Math.round((strategy.weight * targetTranche + confidence * (targetTranche * 0.35)) / 50) * 50
+        );
 
         signals.push({
           id: `SIG-${signalCounter}`,

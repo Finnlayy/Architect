@@ -205,10 +205,10 @@ export type BotStatus =
 export interface WorkerBotData {
   id: string; // e.g. 'BOT-7742'
   name: string; // e.g. 'DCA Bot Alpha'
-  exchange: string; // e.g. 'Pionex Futures'
+  exchange: string; // e.g. 'Kraken Futures', 'Kraken Spot'
   status: BotStatus;
-  pair: string; // e.g. 'HYPE/USDT.P', 'BTC/USDT.P'
-  strategy: string; // e.g. 'PERPETUAL FUTURES · DCA STRATEGY'
+  pair: string; // e.g. 'BTC/USD', 'ETH/USD'
+  strategy: string; // e.g. 'KRAKEN FUTURES · DCA STRATEGY'
   direction: 'LONG' | 'SHORT';
   leverage: number; // e.g. 75
 
@@ -247,6 +247,29 @@ export interface WorkerBotData {
   aprPct?: number;
   dcaOrdersTriggered?: number;
   lastUpdated?: string;
+
+  // Kraken CLI Routing & Real-Time Order Execution
+  krakenPair?: string;
+  lastCliExecution?: {
+    command: string;
+    txid: string;
+    status: string;
+    timestamp: number;
+    price?: number;
+    volume?: number;
+    cost?: number;
+    side?: 'buy' | 'sell';
+  };
+  cliExecutionHistory?: Array<{
+    command: string;
+    txid: string;
+    status: string;
+    timestamp: number;
+    price?: number;
+    volume?: number;
+    cost?: number;
+    side?: 'buy' | 'sell';
+  }>;
 }
 
 export type WorkerBot = WorkerBotData;
@@ -269,7 +292,13 @@ export interface WorkerBotTickPayload {
 }
 
 export interface WorkerBotWsMessage {
-  type: 'TICK_UPDATE' | 'BOT_STATUS_CHANGED' | 'SYNC_ALL_BOTS' | 'COMMAND_ACK' | 'BOT_FINISHED';
+  type:
+    | 'TICK_UPDATE'
+    | 'BOT_STATUS_CHANGED'
+    | 'SYNC_ALL_BOTS'
+    | 'COMMAND_ACK'
+    | 'BOT_FINISHED'
+    | 'BOT_ORDER_EXECUTED';
   payload: any;
   timestamp?: number;
 }

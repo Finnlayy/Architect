@@ -24,6 +24,7 @@ import { WorkerBotCard } from './WorkerBotCard';
 import { useBotStream } from '../hooks/useBotStream';
 import { useBotHistory } from '../hooks/useBotHistory';
 import { INITIAL_WORKER_BOTS } from '../data/workerBots';
+import { spawnBotFromHistory } from '../services/krakenCliRouter';
 
 // Fallback-/Initial-Daten, bis der WebSocket feuert
 const initialSwarm: WorkerBotData[] = INITIAL_WORKER_BOTS;
@@ -50,7 +51,7 @@ export const WorkerBotsView: React.FC<WorkerBotsViewProps> = ({
 
   // Verbinde zum Backend (Live-Daten via WS, Historie via REST & DB)
   const initialData = propBots && propBots.length > 0 ? propBots : initialSwarm;
-  const liveBots = useBotStream('ws://localhost:8000/api/v1/swarm/stream', initialData);
+  const liveBots = useBotStream('', initialData);
   const { history, loading: historyLoading, addHistoryItem } = useBotHistory();
 
   const handleToggleStatus = (botId: string) => {
@@ -99,6 +100,28 @@ export const WorkerBotsView: React.FC<WorkerBotsViewProps> = ({
     }
   };
 
+  const [respawningId, setRespawningId] = useState<string | null>(null);
+  const [respawnFeedback, setRespawnFeedback] = useState<string | null>(null);
+
+  const handleRespawnBot = async (historicalBotId: string) => {
+    setRespawningId(historicalBotId);
+    setRespawnFeedback(null);
+    try {
+      const res = await spawnBotFromHistory(historicalBotId);
+      if (res.success) {
+        setRespawnFeedback(`Bot erfolgreich als ${res.newBotId} geklont und im Live-Swarm gestartet!`);
+        setTimeout(() => {
+          setActiveTab('live');
+          setRespawnFeedback(null);
+        }, 1200);
+      }
+    } catch (err: any) {
+      setRespawnFeedback(`Fehler beim Klonen: ${err.message}`);
+    } finally {
+      setRespawningId(null);
+    }
+  };
+
   const [selectedBotId, setSelectedBotId] = useState<string>(liveBots[0]?.id || 'BOT-7742');
   const [viewMode, setViewMode] = useState<'featured' | 'grid'>('grid');
   const [filterExchange, setFilterExchange] = useState<string>('ALL');
@@ -107,10 +130,10 @@ export const WorkerBotsView: React.FC<WorkerBotsViewProps> = ({
   const [isDeployModalOpen, setIsDeployModalOpen] = useState<boolean>(false);
 
   // New bot modal form state
-  const [newBotPair, setNewBotPair] = useState<string>('AVAX/USDT.P');
+  const [newBotPair, setNewBotPair] = useState<string>('BTC/USD');
   const [newBotName, setNewBotName] = useState<string>('Delta-Neutral Scalper');
-  const [newBotExchange, setNewBotExchange] = useState<string>('Hyperliquid L2');
-  const [newBotStrategy, setNewBotStrategy] = useState<string>('PERPETUAL FUTURES · VOLATILITY DCA');
+  const [newBotExchange, setNewBotExchange] = useState<string>('Kraken Futures');
+  const [newBotStrategy, setNewBotStrategy] = useState<string>('KRAKEN FUTURES · VOLATILITY DCA');
   const [newBotDirection, setNewBotDirection] = useState<'LONG' | 'SHORT'>('LONG');
   const [newBotLeverage, setNewBotLeverage] = useState<number>(35);
   const [newBotInvestment, setNewBotInvestment] = useState<number>(150);
@@ -670,6 +693,13 @@ export const WorkerBotsView: React.FC<WorkerBotsViewProps> = ({
             </div>
           </div>
 
+          {respawnFeedback && (
+            <div className="p-3 rounded-lg bg-purple-950/50 border border-purple-500/40 text-purple-300 font-mono text-xs flex items-center gap-2">
+              <Sparkles className="w-4 h-4 text-purple-400 shrink-0" />
+              <span>{respawnFeedback}</span>
+            </div>
+          )}
+
           {/* Grid mit den archivierten Bot-Karten */}
           {historyLoading ? (
             <div className="flex items-center justify-center p-12 bg-slate-900/60 border border-slate-800 rounded-xl">
@@ -687,13 +717,24 @@ export const WorkerBotsView: React.FC<WorkerBotsViewProps> = ({
               {history.map((bot) => (
                 <div
                   key={bot.id}
-                  className="opacity-75 grayscale hover:grayscale-0 transition-all duration-300 transform hover:-translate-y-1 hover:opacity-100"
+                  className="flex flex-col gap-2 group"
                 >
-                  <WorkerBotCard
-                    bot={bot}
-                    // Ein leerer Callback, da man historische Bots nicht mehr pausieren kann
-                    onToggleStatus={() => console.log('Bot ist bereits beendet')}
-                  />
+                  <div className="opacity-80 group-hover:opacity-100 transition-all duration-300">
+                    <WorkerBotCard
+                      bot={bot}
+                      // Ein leerer Callback, da man historische Bots nicht mehr pausieren kann
+                      onToggleStatus={() => console.log('Bot ist bereits beendet')}
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handleRespawnBot(bot.id)}
+                    disabled={respawningId === bot.id}
+                    className="w-full py-2 px-3 rounded-lg bg-purple-600/20 hover:bg-purple-600/30 border border-purple-500/40 hover:border-purple-500 text-purple-300 text-xs font-mono font-semibold flex items-center justify-center gap-2 transition shadow-sm"
+                  >
+                    <Sparkles className={`w-3.5 h-3.5 ${respawningId === bot.id ? 'animate-spin' : ''}`} />
+                    <span>{respawningId === bot.id ? 'Orchestrator klont...' : 'Autonom Klonen / Respawn Session'}</span>
+                  </button>
                 </div>
               ))}
             </div>
@@ -761,12 +802,10 @@ export const WorkerBotsView: React.FC<WorkerBotsViewProps> = ({
                     onChange={(e) => setNewBotExchange(e.target.value)}
                     className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-slate-100 focus:border-purple-500 focus:outline-none"
                   >
-                    <option value="Hyperliquid L2">Hyperliquid L2</option>
-                    <option value="Pionex Futures">Pionex Futures</option>
-                    <option value="dYdX v4">dYdX v4</option>
-                    <option value="Binance Futures">Binance Futures</option>
-                    <option value="Bybit Linear">Bybit Linear</option>
-                    <option value="Deribit Direct">Deribit Direct</option>
+                    <option value="Kraken Futures">Kraken Futures (Multi-Collateral)</option>
+                    <option value="Kraken Spot / Margin">Kraken Spot / Margin (DMA)</option>
+                    <option value="Kraken Paper Sandbox">Kraken Paper Sandbox (CLI Engine)</option>
+                    <option value="Kraken Derivatives">Kraken Derivatives Direct</option>
                   </select>
                 </div>
                 <div>
