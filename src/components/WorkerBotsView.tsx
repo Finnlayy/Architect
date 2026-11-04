@@ -18,9 +18,11 @@ import {
   Filter,
   Trophy,
   Clock,
+  Receipt,
 } from 'lucide-react';
 import { WorkerBotData } from '../types/trading';
 import { WorkerBotCard } from './WorkerBotCard';
+import { AnimatedNumber, AnimatedCurrency, AnimatedPercent } from './AnimatedNumber';
 import { useBotStream } from '../hooks/useBotStream';
 import { useBotHistory } from '../hooks/useBotHistory';
 import { INITIAL_WORKER_BOTS } from '../data/workerBots';
@@ -158,6 +160,20 @@ export const WorkerBotsView: React.FC<WorkerBotsViewProps> = ({
   );
   const totalDcaOrders = useMemo(
     () => liveBots.reduce((acc, b) => acc + (b.metrics?.dcaOrdersTriggered ?? b.dcaOrdersTriggered ?? 0), 0),
+    [liveBots]
+  );
+  const totalTxFees = useMemo(
+    () => liveBots.reduce((acc, b) => {
+      if (b.metrics?.transactionFees !== undefined) return acc + b.metrics.transactionFees;
+      const inv = b.metrics?.investment ?? b.investmentUsd ?? 0;
+      const lev = b.leverage > 0 ? b.leverage : 1;
+      const nominal = inv * lev;
+      const dcaOrders = b.metrics?.dcaOrdersTriggered ?? b.dcaOrdersTriggered ?? 0;
+      const steps = b.metrics?.dcaSteps ?? 100;
+      const tranche = nominal / Math.max(steps, 1);
+      const vol = nominal + (dcaOrders * tranche);
+      return acc + (vol * 0.0004);
+    }, 0),
     [liveBots]
   );
   const activeBotsCount = useMemo(
@@ -413,17 +429,17 @@ export const WorkerBotsView: React.FC<WorkerBotsViewProps> = ({
           </div>
 
           {/* Aggregate Metrics Header */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 font-mono">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 font-mono gpu-accelerate">
             <div className="bg-slate-900 border border-slate-800 rounded-xl p-3">
               <div className="text-[10px] text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
                 <DollarSign className="w-3.5 h-3.5 text-amber-400" />
                 DEPLOYSGESAMTKAPITAL
               </div>
-              <div className="text-base font-bold text-slate-100 mt-1">
-                {totalInvestment.toFixed(2)} $
+              <div className="text-base font-bold text-slate-100 mt-1 tabular-nums">
+                <AnimatedNumber value={totalInvestment} precision={2} suffix=" $" />
               </div>
-              <div className="text-[10px] text-slate-500 mt-0.5">
-                {(totalInvestment * 0.915).toFixed(2)} EUR Pool
+              <div className="text-[10px] text-slate-500 mt-0.5 tabular-nums">
+                <AnimatedNumber value={totalInvestment * 0.915} precision={2} suffix=" EUR Pool" />
               </div>
             </div>
 
@@ -432,11 +448,22 @@ export const WorkerBotsView: React.FC<WorkerBotsViewProps> = ({
                 <Zap className="w-3.5 h-3.5 text-emerald-400" />
                 GESAMT UNREALIZED P&amp;L
               </div>
-              <div className={`text-base font-bold mt-1 ${totalUnrealizedPnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                {totalUnrealizedPnl >= 0 ? `+${totalUnrealizedPnl.toFixed(2)}` : totalUnrealizedPnl.toFixed(2)} $
+              <div className={`text-base font-bold mt-1 tabular-nums ${totalUnrealizedPnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                <AnimatedCurrency value={totalUnrealizedPnl} showSign={true} precision={2} />
               </div>
-              <div className="text-[10px] text-emerald-500 mt-0.5">
-                {totalInvestment > 0 ? `+${((totalUnrealizedPnl / totalInvestment) * 100).toFixed(2)}% gewichtet` : '0%'}
+              <div className="text-[10px] text-emerald-500 mt-0.5 tabular-nums">
+                {totalInvestment > 0 ? (
+                  <>
+                    <AnimatedPercent
+                      value={(totalUnrealizedPnl / totalInvestment) * 100}
+                      showSign={true}
+                      precision={2}
+                    />{' '}
+                    gewichtet
+                  </>
+                ) : (
+                  '0%'
+                )}
               </div>
             </div>
 
@@ -445,8 +472,8 @@ export const WorkerBotsView: React.FC<WorkerBotsViewProps> = ({
                 <TrendingUp className="w-3.5 h-3.5 text-purple-400" />
                 KUMULIERTER PROFIT
               </div>
-              <div className="text-base font-bold text-purple-400 mt-1">
-                +{totalRealizedProfit.toFixed(2)} $
+              <div className="text-base font-bold text-purple-400 mt-1 tabular-nums">
+                <AnimatedCurrency value={totalRealizedProfit} showSign={true} precision={2} />
               </div>
               <div className="text-[10px] text-slate-500 mt-0.5">
                 Über alle Zyklen
@@ -458,11 +485,27 @@ export const WorkerBotsView: React.FC<WorkerBotsViewProps> = ({
                 <Activity className="w-3.5 h-3.5 text-sky-400" />
                 DCA BUFFERS &amp; ORDERS
               </div>
-              <div className="text-base font-bold text-sky-400 mt-1">
-                {totalDcaOrders} Orders
+              <div className="text-base font-bold text-sky-400 mt-1 tabular-nums">
+                <AnimatedNumber value={totalDcaOrders} precision={0} suffix=" Orders" />
               </div>
               <div className="text-[10px] text-slate-500 mt-0.5">
                 Ausgelöste DCA-Käufe
+              </div>
+            </div>
+
+            <div className="bg-slate-900 border border-slate-800 rounded-xl p-3">
+              <div className="text-[10px] text-slate-400 uppercase tracking-wider flex items-center justify-between">
+                <span className="flex items-center gap-1.5">
+                  <Receipt className="w-3.5 h-3.5 text-amber-400" />
+                  GEBÜHREN (MIN 0.04%)
+                </span>
+                <span className="text-[9px] text-purple-400">≥4 BPS</span>
+              </div>
+              <div className="text-base font-bold text-amber-400 mt-1 tabular-nums">
+                -<AnimatedCurrency value={totalTxFees} precision={2} />
+              </div>
+              <div className="text-[10px] text-slate-500 mt-0.5">
+                Swarm Transaktionsgebühren
               </div>
             </div>
           </div>

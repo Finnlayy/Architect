@@ -61,6 +61,7 @@ export interface JudgeVerdict {
     urgency: 'HIGH' | 'MEDIUM' | 'LOW';
     limitPrice: number;
     maxSlippageBps: number;
+    feeBps?: number; // min 4.0 bps (0.04% min transaction fee)
   };
 }
 
@@ -110,6 +111,7 @@ export interface PortfolioState {
   sharpeRatio: number;
   var99Usd: number; // 99% 1-day Value at Risk
   cvar99Usd: number; // Conditional VaR / Expected Shortfall
+  totalFeesUsd?: number; // Cumulative transaction fees (min 0.04%)
   positions: Position[];
 }
 
@@ -175,6 +177,11 @@ export interface WorkerBotMetrics {
   dcaSteps: number;
   dcaOrdersTriggered: number;
   fundingFees: number;
+  transactionFees?: number; // Cumulative transaction fees (min 0.04% / 4 bps per fill)
+  feeRatePct?: number; // Transaction fee rate percentage (e.g. 0.04)
+  grossProfit?: number; // Realized + Unrealized profit before fees
+  totalFees?: number; // Combined transaction fees + funding fees
+  netProfit?: number; // Net profit after subtracting all fees
   liquidationPrice: number;
   liquidationDistancePct: number;
 }

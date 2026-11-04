@@ -106,13 +106,24 @@ export const DriveBlueprintModal: React.FC<DriveBlueprintModalProps> = ({
                   </div>
                 </div>
 
-                <button
-                  onClick={onSignOut}
-                  className="flex items-center gap-1 text-xs font-mono text-slate-400 hover:text-rose-400 transition-colors px-2 py-1 rounded hover:bg-slate-900 border border-slate-800"
-                >
-                  <LogOut className="w-3 h-3" />
-                  <span>Sign Out</span>
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={handleLogin}
+                    disabled={isAuthenticating}
+                    className="flex items-center gap-1 text-xs font-mono text-blue-400 hover:text-blue-300 transition-colors px-2 py-1 rounded hover:bg-slate-900 border border-slate-800 cursor-pointer"
+                    title="Re-authenticate or refresh Drive authorization"
+                  >
+                    <RefreshCw className={`w-3 h-3 ${isAuthenticating ? 'animate-spin' : ''}`} />
+                    <span>Re-Authenticate</span>
+                  </button>
+                  <button
+                    onClick={onSignOut}
+                    className="flex items-center gap-1 text-xs font-mono text-slate-400 hover:text-rose-400 transition-colors px-2 py-1 rounded hover:bg-slate-900 border border-slate-800 cursor-pointer"
+                  >
+                    <LogOut className="w-3 h-3" />
+                    <span>Sign Out</span>
+                  </button>
+                </div>
               </div>
             ) : (
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -183,9 +194,19 @@ export const DriveBlueprintModal: React.FC<DriveBlueprintModalProps> = ({
 
           {/* Error Banner */}
           {error && (
-            <div className="p-3 rounded bg-rose-950/40 border border-rose-800/60 text-xs font-mono text-rose-300 flex items-start gap-2">
-              <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
-              <span>{error}</span>
+            <div className="p-3 rounded bg-rose-950/40 border border-rose-800/60 text-xs font-mono text-rose-300 flex items-start justify-between gap-3">
+              <div className="flex items-start gap-2">
+                <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+                <span>{error}</span>
+              </div>
+              <button
+                type="button"
+                onClick={handleLogin}
+                disabled={isAuthenticating}
+                className="shrink-0 px-2.5 py-1 bg-rose-900/60 hover:bg-rose-800 text-rose-100 rounded border border-rose-700/60 text-[11px] font-semibold transition-colors cursor-pointer"
+              >
+                Sign In with Google
+              </button>
             </div>
           )}
 

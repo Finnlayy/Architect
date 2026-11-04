@@ -25,6 +25,7 @@ import {
   CheckCircle,
 } from 'lucide-react';
 import { WorkerBotData } from '../types/trading';
+import { AnimatedNumber, AnimatedCurrency, AnimatedPercent } from './AnimatedNumber';
 
 interface WorkerBotCardProps {
   bot: WorkerBotData;
@@ -150,6 +151,12 @@ export const WorkerBotCard: React.FC<WorkerBotCardProps> = ({
   const dcaSteps = bot.metrics?.dcaSteps ?? 100;
   const dcaOrdersTriggered = bot.metrics?.dcaOrdersTriggered ?? bot.dcaOrdersTriggered ?? 0;
   const fundingFees = bot.metrics?.fundingFees ?? 0;
+  const lev = bot.leverage > 0 ? bot.leverage : 1;
+  const positionNominal = investment * lev;
+  const trancheSizeUsd = positionNominal / Math.max(dcaSteps, 1);
+  const totalTradedVolumeUsd = positionNominal + (dcaOrdersTriggered * trancheSizeUsd);
+  const transactionFees = bot.metrics?.transactionFees ?? Math.max(0.01, Math.round(totalTradedVolumeUsd * 0.0004 * 100) / 100);
+  const totalFees = bot.metrics?.totalFees ?? Math.round((transactionFees + Math.abs(fundingFees)) * 100) / 100;
   const liquidationPrice = bot.metrics?.liquidationPrice ?? 0;
   const liquidationDistancePct = bot.metrics?.liquidationDistancePct ?? 0;
 
@@ -386,7 +393,7 @@ export const WorkerBotCard: React.FC<WorkerBotCardProps> = ({
       </div>
 
       {/* 3. Unrealized P&L Hero Card (Real-time P&L, Entry Price & Current Price) */}
-      <div className="bg-[#121929] border border-slate-800/80 rounded-xl p-3.5 flex items-center justify-between gap-3">
+      <div className="bg-[#121929] border border-slate-800/80 rounded-xl p-3.5 flex items-center justify-between gap-3 gpu-accelerate">
         {/* Left: Unrealized P&L */}
         <div>
           <div className="text-amber-400 text-[11px] font-mono font-semibold flex items-center gap-1.5 uppercase tracking-wider">
@@ -394,23 +401,26 @@ export const WorkerBotCard: React.FC<WorkerBotCardProps> = ({
             UNREALIZED P&amp;L
           </div>
           <div
-            className={`text-2xl sm:text-3xl font-extrabold font-mono tracking-tight mt-1 ${
+            className={`text-2xl sm:text-3xl font-extrabold font-mono tracking-tight mt-1 tabular-nums ${
               isProfitPositive ? 'text-emerald-400' : 'text-rose-400'
             }`}
           >
-            {formatCurrency(bot.unrealizedPnL?.value)}
+            <AnimatedCurrency
+              value={bot.unrealizedPnL?.value ?? 0}
+              showSign={true}
+              precision={2}
+            />
           </div>
           <div
-            className={`text-xs font-mono font-semibold flex items-center gap-1 mt-0.5 ${
+            className={`text-xs font-mono font-semibold flex items-center gap-1 mt-0.5 tabular-nums ${
               (bot.unrealizedPnL?.percentage ?? 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'
             }`}
           >
-            <span>{(bot.unrealizedPnL?.percentage ?? 0) >= 0 ? '▲' : '▼'}</span>
-            <span>
-              {(bot.unrealizedPnL?.percentage ?? 0) >= 0
-                ? `+${(bot.unrealizedPnL?.percentage ?? 0).toFixed(2)}%`
-                : `${(bot.unrealizedPnL?.percentage ?? 0).toFixed(2)}%`}
-            </span>
+            <AnimatedPercent
+              value={bot.unrealizedPnL?.percentage ?? 0}
+              showSign={true}
+              precision={2}
+            />
           </div>
         </div>
 
@@ -420,34 +430,42 @@ export const WorkerBotCard: React.FC<WorkerBotCardProps> = ({
             <div className="text-[10px] font-mono text-slate-400 uppercase tracking-wider">
               EINSTIEGSPREIS
             </div>
-            <div className="text-slate-200 font-mono font-bold text-sm mt-0.5">
-              {formatPrice(bot.entryPrice)} {currencySymbol}
+            <div className="text-slate-200 font-mono font-bold text-sm mt-0.5 tabular-nums">
+              <AnimatedNumber
+                value={bot.entryPrice ?? 0}
+                precision={(bot.entryPrice ?? 0) >= 1000 ? 2 : 3}
+                suffix={` ${currencySymbol}`}
+              />
             </div>
           </div>
           <div>
             <div className="text-[10px] font-mono text-slate-400 uppercase tracking-wider">
               AKTUELLER PREIS
             </div>
-            <div className="text-emerald-400 font-mono font-bold text-sm mt-0.5">
-              {formatPrice(bot.currentPrice)} {currencySymbol}
+            <div className="text-emerald-400 font-mono font-bold text-sm mt-0.5 tabular-nums">
+              <AnimatedNumber
+                value={bot.currentPrice ?? 0}
+                precision={(bot.currentPrice ?? 0) >= 1000 ? 2 : 3}
+                suffix={` ${currencySymbol}`}
+              />
             </div>
           </div>
         </div>
       </div>
 
       {/* 4. 2x3 Metric Grid (Fully Populated from Bot Metrics Props) */}
-      <div className="grid grid-cols-2 gap-2.5">
+      <div className="grid grid-cols-2 gap-2.5 gpu-accelerate">
         {/* Metric 1: Investment */}
         <div className="bg-[#131929] border border-slate-800/80 rounded-xl p-3 flex flex-col justify-between">
           <div className="text-amber-400 text-[10px] font-mono font-semibold uppercase tracking-wider flex items-center gap-1.5">
             <DollarSign className="w-3 h-3 text-amber-400" />
             INVESTMENT
           </div>
-          <div className="text-slate-100 font-mono font-bold text-base mt-1">
-            {investment.toFixed(2)} {currencySymbol}
+          <div className="text-slate-100 font-mono font-bold text-base mt-1 tabular-nums">
+            <AnimatedNumber value={investment} precision={2} suffix={` ${currencySymbol}`} />
           </div>
-          <div className="text-slate-500 font-mono text-[11px] mt-0.5">
-            {investmentEur.toFixed(2)} EUR
+          <div className="text-slate-500 font-mono text-[11px] mt-0.5 tabular-nums">
+            <AnimatedNumber value={investmentEur} precision={2} suffix=" EUR" />
           </div>
         </div>
 
@@ -457,8 +475,8 @@ export const WorkerBotCard: React.FC<WorkerBotCardProps> = ({
             <TrendingUp className="w-3 h-3 text-rose-400" />
             AKT. GEWINN
           </div>
-          <div className="text-emerald-400 font-mono font-bold text-base mt-1">
-            {formatCurrency(realizedProfit)}
+          <div className="text-emerald-400 font-mono font-bold text-base mt-1 tabular-nums">
+            <AnimatedCurrency value={realizedProfit} showSign={true} precision={2} />
           </div>
           <div className="text-slate-500 font-mono text-[11px] mt-0.5 truncate">
             {profitCycleType}
@@ -471,8 +489,9 @@ export const WorkerBotCard: React.FC<WorkerBotCardProps> = ({
             <Target className="w-3 h-3 text-rose-400" />
             DCA RANGE
           </div>
-          <div className="text-slate-100 font-mono font-bold text-base mt-1">
-            {formatPrice(dcaMin)} – {formatPrice(dcaMax)}
+          <div className="text-slate-100 font-mono font-bold text-base mt-1 tabular-nums text-xs sm:text-sm">
+            <AnimatedNumber value={dcaMin} precision={dcaMin >= 1000 ? 2 : 3} /> –{' '}
+            <AnimatedNumber value={dcaMax} precision={dcaMax >= 1000 ? 2 : 3} />
           </div>
           <div className="text-slate-500 font-mono text-[11px] mt-0.5">
             {dcaSteps} DCA-STUFEN
@@ -485,25 +504,29 @@ export const WorkerBotCard: React.FC<WorkerBotCardProps> = ({
             <Sliders className="w-3 h-3 text-sky-400" />
             DCA ORDERS
           </div>
-          <div className="text-slate-100 font-mono font-bold text-base mt-1">
-            {dcaOrdersTriggered}
+          <div className="text-slate-100 font-mono font-bold text-base mt-1 tabular-nums">
+            <AnimatedNumber value={dcaOrdersTriggered} precision={0} />
           </div>
           <div className="text-slate-500 font-mono text-[11px] mt-0.5">
             Ausgelöste Käufe
           </div>
         </div>
 
-        {/* Metric 5: Funding Fees */}
+        {/* Metric 5: Gebühren (Tx min 0.04% + Funding) */}
         <div className="bg-[#131929] border border-slate-800/80 rounded-xl p-3 flex flex-col justify-between">
-          <div className="text-emerald-400 text-[10px] font-mono font-semibold uppercase tracking-wider flex items-center gap-1.5">
-            <Receipt className="w-3 h-3 text-emerald-400" />
-            FUNDING FEES
+          <div className="text-emerald-400 text-[10px] font-mono font-semibold uppercase tracking-wider flex items-center justify-between">
+            <span className="flex items-center gap-1.5">
+              <Receipt className="w-3 h-3 text-emerald-400" />
+              GEBÜHREN (MIN 0.04%)
+            </span>
+            <span className="text-[9px] text-purple-400 font-mono">≥4 BPS</span>
           </div>
-          <div className="text-amber-400 font-mono font-bold text-base mt-1">
-            {formatCurrency(fundingFees)}
+          <div className="text-amber-400 font-mono font-bold text-base mt-1 tabular-nums">
+            <AnimatedCurrency value={-totalFees} showSign={true} precision={2} />
           </div>
-          <div className="text-slate-500 font-mono text-[11px] mt-0.5">
-            Kumuliert
+          <div className="text-slate-500 font-mono text-[10px] mt-0.5 flex items-center justify-between">
+            <span>Tx: -${transactionFees.toFixed(2)}</span>
+            <span>Fund: {fundingFees >= 0 ? '+' : ''}{fundingFees.toFixed(2)}$</span>
           </div>
         </div>
 
@@ -513,11 +536,20 @@ export const WorkerBotCard: React.FC<WorkerBotCardProps> = ({
             <ShieldAlert className="w-3 h-3 text-sky-400" />
             LIQUIDATION
           </div>
-          <div className="text-rose-500 font-mono font-bold text-base mt-1">
-            {formatPrice(liquidationPrice)} {currencySymbol}
+          <div className="text-rose-500 font-mono font-bold text-base mt-1 tabular-nums">
+            <AnimatedNumber
+              value={liquidationPrice}
+              precision={liquidationPrice >= 1000 ? 2 : 3}
+              suffix={` ${currencySymbol}`}
+            />
           </div>
-          <div className="text-slate-500 font-mono text-[11px] mt-0.5">
-            {liquidationDistancePct >= 0 ? `+${liquidationDistancePct.toFixed(2)}%` : `${liquidationDistancePct.toFixed(2)}%`} vom Einstieg
+          <div className="text-slate-500 font-mono text-[11px] mt-0.5 tabular-nums">
+            <AnimatedPercent
+              value={liquidationDistancePct}
+              showSign={true}
+              precision={2}
+              suffix=" vom Einstieg"
+            />
           </div>
         </div>
       </div>
@@ -642,7 +674,7 @@ export const WorkerBotCard: React.FC<WorkerBotCardProps> = ({
       </div>
 
       {/* 6. Total Profit Hero Card */}
-      <div className="bg-gradient-to-r from-[#141630] to-[#10182c] border border-purple-500/30 rounded-xl p-3.5 flex items-center justify-between gap-3">
+      <div className="bg-gradient-to-r from-[#141630] to-[#10182c] border border-purple-500/30 rounded-xl p-3.5 flex items-center justify-between gap-3 gpu-accelerate">
         <div className="flex items-center gap-2">
           <Trophy className="w-4 h-4 text-amber-400 shrink-0" />
           <span className="text-amber-400 font-mono font-bold text-xs uppercase tracking-wider">
@@ -651,11 +683,12 @@ export const WorkerBotCard: React.FC<WorkerBotCardProps> = ({
         </div>
 
         <div className="text-right">
-          <div className="text-purple-400 font-mono font-extrabold text-xl tracking-tight">
-            {formatCurrency(totalProfit)}
+          <div className="text-purple-400 font-mono font-extrabold text-xl tracking-tight tabular-nums">
+            <AnimatedCurrency value={totalProfit} showSign={true} precision={2} />
           </div>
-          <div className="text-indigo-300 font-mono text-[10px] font-semibold mt-0.5">
-            ROI: +{roi.toFixed(2)}% • APR +{apr.toLocaleString('en-US')}%
+          <div className="text-indigo-300 font-mono text-[10px] font-semibold mt-0.5 tabular-nums">
+            ROI: <AnimatedPercent value={roi} showSign={true} precision={2} /> • APR +
+            <AnimatedNumber value={apr} precision={0} />%
           </div>
         </div>
       </div>

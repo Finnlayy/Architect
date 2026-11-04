@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { ShieldCheck, Play, Pause, RefreshCw, HardDrive, Zap, Lock, AlertTriangle, ExternalLink, Radio, Wifi, History } from 'lucide-react';
 import { PortfolioState } from '../types/trading';
 import { User } from 'firebase/auth';
+import { AnimatedNumber, AnimatedCurrency, AnimatedPercent } from './AnimatedNumber';
 
 interface HeaderProps {
   isRunning: boolean;
@@ -20,6 +21,7 @@ interface HeaderProps {
     latencyMs: number;
     messagesCount: number;
     onReconnect?: () => void;
+    onForceRecalibrate?: () => Promise<any> | void;
     isRealData?: boolean;
     reconnectAttempt?: number;
     nextRetryDelayMs?: number | null;
@@ -43,6 +45,7 @@ export const Header: React.FC<HeaderProps> = ({
 }) => {
   const tabs = [
     { id: 'judge', label: 'The Judge (M8 Gate)' },
+    { id: 'agent', label: 'OMEGA Agent (7-Stage)' },
     { id: 'swarm', label: 'The Swarm (Alpha Agents)' },
     { id: 'bots', label: 'Worker & DCA Bots' },
     { id: 'portfolio', label: 'Portfolio & Executions' },
@@ -54,6 +57,27 @@ export const Header: React.FC<HeaderProps> = ({
   // High-precision backoff countdown for WebSocket reconnection on port 1000
   const [countdownSec, setCountdownSec] = useState<number | null>(null);
   const [countdownProgress, setCountdownProgress] = useState<number>(0);
+
+  // Force Price Recalibration state
+  const [isRecalibrating, setIsRecalibrating] = useState<boolean>(false);
+  const [recalibrationNotice, setRecalibrationNotice] = useState<string | null>(null);
+
+  const handleForceRecalibrate = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (isRecalibrating || !krakenStatus?.onForceRecalibrate) return;
+    setIsRecalibrating(true);
+    setRecalibrationNotice(null);
+    try {
+      await krakenStatus.onForceRecalibrate();
+      setRecalibrationNotice('0 DRIFT ✓');
+      setTimeout(() => setRecalibrationNotice(null), 3500);
+    } catch (err) {
+      setRecalibrationNotice('ERR');
+      setTimeout(() => setRecalibrationNotice(null), 3500);
+    } finally {
+      setIsRecalibrating(false);
+    }
+  };
 
   const isLive = krakenStatus?.status === 'LIVE';
   const targetPort = krakenStatus?.targetPort || 1000;
@@ -216,31 +240,67 @@ export const Header: React.FC<HeaderProps> = ({
                   <RefreshCw className={`w-3 h-3 ${!isLive ? 'text-amber-400 animate-spin' : ''}`} />
                 </button>
               )}
+
+              {/* Force Price Recalibration: Hard Flush & Kraken REST Ticker Sync */}
+              {krakenStatus.onForceRecalibrate && (
+                <button
+                  id="force-price-recalibration-button"
+                  onClick={handleForceRecalibrate}
+                  disabled={isRecalibrating}
+                  title="Force Price Recalibration: Hard Flush des lokalen Marktstatus & Abruf absoluter Ticker-Preise von Kraken REST API (Bereinigt Simulationsdrift)"
+                  className={`transition-all ml-1.5 px-2 py-0.5 rounded flex items-center gap-1.5 text-[10px] font-mono border select-none ${
+                    recalibrationNotice === '0 DRIFT ✓'
+                      ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/50 shadow-[0_0_10px_rgba(16,185,129,0.35)]'
+                      : recalibrationNotice === 'ERR'
+                      ? 'bg-rose-500/20 text-rose-300 border-rose-500/50'
+                      : isRecalibrating
+                      ? 'bg-cyan-500/25 text-cyan-200 border-cyan-500/60 shadow-[0_0_10px_rgba(6,182,212,0.35)] cursor-wait'
+                      : 'bg-slate-900/90 text-slate-300 border-slate-700 hover:bg-slate-800 hover:text-cyan-300 hover:border-cyan-500/50 active:scale-95'
+                  }`}
+                >
+                  <RefreshCw
+                    className={`w-3 h-3 ${
+                      isRecalibrating
+                        ? 'text-cyan-400 animate-spin'
+                        : recalibrationNotice === '0 DRIFT ✓'
+                        ? 'text-emerald-400'
+                        : 'text-cyan-400'
+                    }`}
+                  />
+                  <span className="font-bold tracking-tight whitespace-nowrap">
+                    {isRecalibrating
+                      ? 'RECALIBRATING...'
+                      : recalibrationNotice
+                      ? recalibrationNotice
+                      : 'RECALIBRATE'}
+                  </span>
+                </button>
+              )}
             </div>
           )}
 
           <div className="flex items-center gap-1.5 bg-slate-950 px-2.5 py-1 rounded border border-slate-800">
             <span className="text-slate-400">NAV:</span>
             <span className="font-semibold text-slate-100">
-              ${portfolio.navUsd.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              <AnimatedCurrency value={portfolio.navUsd} precision={2} />
             </span>
           </div>
           <div className="flex items-center gap-1.5 bg-slate-950 px-2.5 py-1 rounded border border-slate-800">
             <span className="text-slate-400">Gross Lev:</span>
             <span className={`font-semibold ${portfolio.grossLeverage > 2.5 ? 'text-amber-400' : 'text-slate-200'}`}>
-              {portfolio.grossLeverage.toFixed(2)}x
+              <AnimatedNumber value={portfolio.grossLeverage} precision={2} suffix="x" />
             </span>
           </div>
           <div className="flex items-center gap-1.5 bg-slate-950 px-2.5 py-1 rounded border border-slate-800">
             <span className="text-slate-400">99% CVaR:</span>
             <span className="font-semibold text-rose-400">
-              ${portfolio.cvar99Usd.toLocaleString()}
+              <AnimatedCurrency value={portfolio.cvar99Usd} precision={0} />
             </span>
           </div>
           <div className="flex items-center gap-1.5 bg-slate-950 px-2.5 py-1 rounded border border-slate-800">
             <span className="text-slate-400">Day PnL:</span>
             <span className={`font-semibold ${portfolio.dailyPnlPct >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-              {portfolio.dailyPnlPct >= 0 ? '+' : ''}{portfolio.dailyPnlPct.toFixed(2)}%
+              <AnimatedPercent value={portfolio.dailyPnlPct} precision={2} showSign={true} />
             </span>
           </div>
         </div>

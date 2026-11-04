@@ -764,3 +764,35 @@ export async function fetchKrakenInventory(): Promise<{
   return response.json();
 }
 
+export interface KrakenRecalibrationResult {
+  success: boolean;
+  action: string;
+  message: string;
+  calibratedSymbols: string[];
+  errors?: string[];
+  markets: Record<string, any>;
+  paperLedger?: {
+    current_value: number;
+    cash: number;
+    unrealized_pnl: number;
+    positions_count: number;
+  };
+  timestamp: number;
+}
+
+/**
+ * Executes a Force Price Recalibration:
+ * Triggers a hard flush of the local market state and fetches the absolute current ticker data
+ * from the Kraken Public REST API to eliminate lingering simulation drifts.
+ */
+export async function executeKrakenPriceRecalibration(): Promise<KrakenRecalibrationResult> {
+  const response = await fetch('/api/kraken/recalibrate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to force price recalibration: ${response.statusText}`);
+  }
+  return response.json();
+}
+

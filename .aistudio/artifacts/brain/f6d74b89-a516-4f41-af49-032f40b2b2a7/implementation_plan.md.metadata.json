@@ -1,0 +1,6 @@
+{
+  "summary": "Umsetzungsplan für den Umbau von OMEGA NIO zu einem kompromisslosen, produktiven Quant- & Trading-Terminal nach dem Vorbild von Finviz, Fischer, CCXT und El Toro – ohne Präsentationsballast, mit echtem OHLCV-Backtester, Screener, Orderbook/Execution-Blotter, Persistenz und Export.",
+  "updatedAt": "2026-11-04T19:15:13.327807543Z",
+  "requestFeedback": true,
+  "userFacing": true
+}

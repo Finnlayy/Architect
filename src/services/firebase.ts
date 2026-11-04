@@ -17,7 +17,7 @@ export const auth = getAuth(app);
 export const googleProvider = new GoogleAuthProvider();
 googleProvider.addScope('https://www.googleapis.com/auth/drive.readonly');
 googleProvider.setCustomParameters({
-  prompt: 'select_account'
+  prompt: 'consent select_account',
 });
 
 // Flag to track ongoing sign-in

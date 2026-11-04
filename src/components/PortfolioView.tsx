@@ -13,11 +13,13 @@ import {
   ShieldAlert,
   Terminal,
   CheckCircle,
+  Download,
 } from 'lucide-react';
 import { PortfolioState, Position, ExecutionOrder } from '../types/trading';
 import { fetchKrakenAccountSummary } from '../services/krakenCliRouter';
 import { fetchAuthoritativeBalance, AuthoritativeBalancePayload } from '../services/krakenCliProxyRegistry';
 import { KrakenAccountSummary } from '../types/krakenCli';
+import { AnimatedNumber, AnimatedCurrency, AnimatedPercent } from './AnimatedNumber';
 
 interface PortfolioViewProps {
   portfolio: PortfolioState;
@@ -35,6 +37,66 @@ export const PortfolioView: React.FC<PortfolioViewProps> = ({
   const [selectedSymbol, setSelectedSymbol] = useState<string | null>(null);
   const [krakenSummary, setKrakenSummary] = useState<KrakenAccountSummary | null>(null);
   const [authoritative, setAuthoritative] = useState<AuthoritativeBalancePayload | null>(null);
+  const [exportNotice, setExportNotice] = useState<string | null>(null);
+
+  const handleExportOrdersCsv = () => {
+    if (!orders || orders.length === 0) return;
+
+    const headers = [
+      'Order ID',
+      'Signal ID',
+      'Timestamp (ISO)',
+      'Timestamp (Local)',
+      'Symbol',
+      'Side',
+      'Quantity',
+      'Filled Price (USD)',
+      'Slippage (bps)',
+      'Exchange Fee (USD)',
+      'Execution Route',
+      'Status',
+    ];
+
+    const escapeCsv = (val: any) => {
+      if (val === null || val === undefined) return '""';
+      const str = String(val);
+      return `"${str.replace(/"/g, '""')}"`;
+    };
+
+    const rows = orders.map((ord) => [
+      escapeCsv(ord.id),
+      escapeCsv(ord.signalId),
+      escapeCsv(new Date(ord.timestamp).toISOString()),
+      escapeCsv(new Date(ord.timestamp).toLocaleString()),
+      escapeCsv(ord.symbol),
+      escapeCsv(ord.side),
+      ord.quantity,
+      ord.filledPrice,
+      ord.slippageBps,
+      ord.feeUsd,
+      escapeCsv(ord.executionRoute),
+      escapeCsv(ord.status),
+    ]);
+
+    const csvContent = [
+      headers.join(','),
+      ...rows.map((r) => r.join(',')),
+    ].join('\r\n');
+
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.setAttribute('href', url);
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    link.setAttribute('download', `kraken_execution_orders_${timestamp}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+
+    setExportNotice(`Exported ${orders.length} orders`);
+    setTimeout(() => setExportNotice(null), 3000);
+  };
 
   useEffect(() => {
     const loadAuthoritative = () => {
@@ -97,80 +159,80 @@ export const PortfolioView: React.FC<PortfolioViewProps> = ({
           </div>
 
           {isPaper ? (
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 text-[11px]">
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 text-[11px] gpu-accelerate">
               <div className="bg-slate-950/60 p-2 rounded border border-slate-800/60">
                 <span className="text-slate-500 block text-[10px]">PAPER CASH</span>
-                <span className="text-slate-200 font-bold block mt-0.5">
-                  ${(authoritative?.cashUsd ?? portfolio.cashUsd).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                <span className="text-slate-200 font-bold block mt-0.5 tabular-nums">
+                  <AnimatedCurrency value={authoritative?.cashUsd ?? portfolio.cashUsd} precision={2} />
                 </span>
               </div>
               <div className="bg-slate-950/60 p-2 rounded border border-slate-800/60">
                 <span className="text-slate-500 block text-[10px]">PAPER NAV (VALUE)</span>
-                <span className="text-emerald-400 font-bold block mt-0.5">
-                  ${(authoritative?.navUsd ?? portfolio.navUsd).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                <span className="text-emerald-400 font-bold block mt-0.5 tabular-nums">
+                  <AnimatedCurrency value={authoritative?.navUsd ?? portfolio.navUsd} precision={2} />
                 </span>
               </div>
               <div className="bg-slate-950/60 p-2 rounded border border-slate-800/60">
                 <span className="text-slate-500 block text-[10px]">REALIZED PnL</span>
-                <span className={`font-bold block mt-0.5 ${(authoritative?.realizedPnl ?? portfolio.realizedPnl) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                  ${(authoritative?.realizedPnl ?? portfolio.realizedPnl).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                <span className={`font-bold block mt-0.5 tabular-nums ${(authoritative?.realizedPnl ?? portfolio.realizedPnl) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                  <AnimatedCurrency value={authoritative?.realizedPnl ?? portfolio.realizedPnl} showSign={true} precision={2} />
                 </span>
               </div>
               <div className="bg-slate-950/60 p-2 rounded border border-slate-800/60">
                 <span className="text-slate-500 block text-[10px]">UNREALIZED PnL</span>
-                <span className={`font-bold block mt-0.5 ${(authoritative?.unrealizedPnl ?? portfolio.unrealizedPnl) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                  ${(authoritative?.unrealizedPnl ?? portfolio.unrealizedPnl).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                <span className={`font-bold block mt-0.5 tabular-nums ${(authoritative?.unrealizedPnl ?? portfolio.unrealizedPnl) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                  <AnimatedCurrency value={authoritative?.unrealizedPnl ?? portfolio.unrealizedPnl} showSign={true} precision={2} />
                 </span>
               </div>
               <div className="bg-slate-950/60 p-2 rounded border border-slate-800/60">
                 <span className="text-slate-500 block text-[10px]">OPEN POSITIONS</span>
-                <span className="text-cyan-400 font-bold block mt-0.5">
-                  {authoritative?.positions?.length ?? portfolio.positions.length} Active
+                <span className="text-cyan-400 font-bold block mt-0.5 tabular-nums">
+                  <AnimatedNumber value={authoritative?.positions?.length ?? portfolio.positions.length} precision={0} suffix=" Active" />
                 </span>
               </div>
               <div className="bg-slate-950/60 p-2 rounded border border-slate-800/60">
                 <span className="text-slate-500 block text-[10px]">CLI TRADES COUNT</span>
-                <span className="text-slate-200 font-bold block mt-0.5">
-                  {authoritative?.tradesCount ?? portfolio.totalTrades} Executed
+                <span className="text-slate-200 font-bold block mt-0.5 tabular-nums">
+                  <AnimatedNumber value={authoritative?.tradesCount ?? portfolio.totalTrades} precision={0} suffix=" Executed" />
                 </span>
               </div>
             </div>
           ) : (
-            <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-2 text-[11px]">
+            <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-2 text-[11px] gpu-accelerate">
               <div className="bg-slate-950/60 p-2 rounded border border-slate-800/60">
                 <span className="text-slate-500 block text-[10px]">USD CASH</span>
-                <span className="text-slate-200 font-bold block mt-0.5">
-                  ${(authoritative?.liveBalances?.ZUSD?.balance ?? krakenSummary?.balances.ZUSD?.balance ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                <span className="text-slate-200 font-bold block mt-0.5 tabular-nums">
+                  <AnimatedCurrency value={authoritative?.liveBalances?.ZUSD?.balance ?? krakenSummary?.balances.ZUSD?.balance ?? 0} precision={2} />
                 </span>
               </div>
               <div className="bg-slate-950/60 p-2 rounded border border-slate-800/60">
                 <span className="text-slate-500 block text-[10px]">USDT LIQUIDITY</span>
-                <span className="text-slate-200 font-bold block mt-0.5">
-                  ${(authoritative?.liveBalances?.USDT?.balance ?? krakenSummary?.balances.USDT?.balance ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                <span className="text-slate-200 font-bold block mt-0.5 tabular-nums">
+                  <AnimatedCurrency value={authoritative?.liveBalances?.USDT?.balance ?? krakenSummary?.balances.USDT?.balance ?? 0} precision={2} />
                 </span>
               </div>
               <div className="bg-slate-950/60 p-2 rounded border border-slate-800/60">
                 <span className="text-slate-500 block text-[10px]">BTC COLD/SPOT</span>
-                <span className="text-slate-200 font-bold block mt-0.5">
-                  {(authoritative?.liveBalances?.XXBT?.balance ?? krakenSummary?.balances.XXBT?.balance ?? 0)} BTC
+                <span className="text-slate-200 font-bold block mt-0.5 tabular-nums">
+                  <AnimatedNumber value={authoritative?.liveBalances?.XXBT?.balance ?? krakenSummary?.balances.XXBT?.balance ?? 0} precision={4} suffix=" BTC" />
                 </span>
               </div>
               <div className="bg-slate-950/60 p-2 rounded border border-slate-800/60">
                 <span className="text-slate-500 block text-[10px]">ETH HOLDINGS</span>
-                <span className="text-slate-200 font-bold block mt-0.5">
-                  {(authoritative?.liveBalances?.XETH?.balance ?? krakenSummary?.balances.XETH?.balance ?? 0)} ETH
+                <span className="text-slate-200 font-bold block mt-0.5 tabular-nums">
+                  <AnimatedNumber value={authoritative?.liveBalances?.XETH?.balance ?? krakenSummary?.balances.XETH?.balance ?? 0} precision={4} suffix=" ETH" />
                 </span>
               </div>
               <div className="bg-slate-950/60 p-2 rounded border border-slate-800/60">
                 <span className="text-slate-500 block text-[10px]">TOTAL MARGIN EQUITY</span>
-                <span className="text-emerald-400 font-bold block mt-0.5">
-                  ${(authoritative?.tradeBalance?.equity ?? krakenSummary?.trade_balance?.equity ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                <span className="text-emerald-400 font-bold block mt-0.5 tabular-nums">
+                  <AnimatedCurrency value={authoritative?.tradeBalance?.equity ?? krakenSummary?.trade_balance?.equity ?? 0} precision={2} />
                 </span>
               </div>
               <div className="bg-slate-950/60 p-2 rounded border border-slate-800/60">
                 <span className="text-slate-500 block text-[10px]">FREE MARGIN</span>
-                <span className="text-emerald-400 font-bold block mt-0.5">
-                  ${(authoritative?.tradeBalance?.free_margin ?? krakenSummary?.trade_balance?.free_margin ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                <span className="text-emerald-400 font-bold block mt-0.5 tabular-nums">
+                  <AnimatedCurrency value={authoritative?.tradeBalance?.free_margin ?? krakenSummary?.trade_balance?.free_margin ?? 0} precision={2} />
                 </span>
               </div>
             </div>
@@ -179,32 +241,33 @@ export const PortfolioView: React.FC<PortfolioViewProps> = ({
       )}
 
       {/* High-Level Risk & Balance Metrics */}
-      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3 gpu-accelerate">
         <div className="bg-slate-900 border border-slate-800 p-3 rounded-lg">
           <span className="text-[11px] font-mono text-slate-400 block">Total NAV</span>
-          <span className="text-lg font-bold font-mono text-slate-100 mt-1 block">
-            ${portfolio.navUsd.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+          <span className="text-lg font-bold font-mono text-slate-100 mt-1 block tabular-nums">
+            <AnimatedCurrency value={portfolio.navUsd} precision={2} />
           </span>
-          <span className={`text-[10px] font-mono flex items-center gap-0.5 mt-1 ${portfolio.dailyPnlPct >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+          <span className={`text-[10px] font-mono flex items-center gap-0.5 mt-1 tabular-nums ${portfolio.dailyPnlPct >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
             {portfolio.dailyPnlPct >= 0 ? <ArrowUpRight className="w-3 h-3" /> : <ArrowDownRight className="w-3 h-3" />}
-            {portfolio.dailyPnlPct >= 0 ? '+' : ''}{portfolio.dailyPnlPct.toFixed(2)}% Daily
+            <AnimatedPercent value={portfolio.dailyPnlPct} showSign={true} precision={2} suffix=" Daily" />
           </span>
         </div>
 
         <div className="bg-slate-900 border border-slate-800 p-3 rounded-lg">
           <span className="text-[11px] font-mono text-slate-400 block">Cash Balance</span>
-          <span className="text-lg font-bold font-mono text-slate-200 mt-1 block">
-            ${Math.round(portfolio.cashUsd).toLocaleString()}
+          <span className="text-lg font-bold font-mono text-slate-200 mt-1 block tabular-nums">
+            <AnimatedCurrency value={portfolio.cashUsd} precision={0} />
           </span>
-          <span className="text-[10px] font-mono text-slate-500 mt-1 block">
-            Available Collateral
+          <span className="text-[10px] font-mono text-amber-400/90 mt-1 flex items-center justify-between">
+            <span>Fees (≥0.04%):</span>
+            <span>-${(portfolio.totalFeesUsd ?? 0).toFixed(2)}</span>
           </span>
         </div>
 
         <div className="bg-slate-900 border border-slate-800 p-3 rounded-lg">
           <span className="text-[11px] font-mono text-slate-400 block">Unrealized PnL</span>
-          <span className={`text-lg font-bold font-mono mt-1 block ${portfolio.unrealizedPnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-            {portfolio.unrealizedPnl >= 0 ? '+' : ''}${portfolio.unrealizedPnl.toLocaleString()}
+          <span className={`text-lg font-bold font-mono mt-1 block tabular-nums ${portfolio.unrealizedPnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+            <AnimatedCurrency value={portfolio.unrealizedPnl} showSign={true} precision={0} />
           </span>
           <span className="text-[10px] font-mono text-slate-400 mt-1 block">
             Across {portfolio.positions.length} active positions
@@ -213,8 +276,8 @@ export const PortfolioView: React.FC<PortfolioViewProps> = ({
 
         <div className="bg-slate-900 border border-slate-800 p-3 rounded-lg">
           <span className="text-[11px] font-mono text-slate-400 block">Gross / Net Lev</span>
-          <span className="text-lg font-bold font-mono text-slate-200 mt-1 block">
-            {portfolio.grossLeverage.toFixed(2)}x / {portfolio.netLeverage.toFixed(2)}x
+          <span className="text-lg font-bold font-mono text-slate-200 mt-1 block tabular-nums">
+            <AnimatedNumber value={portfolio.grossLeverage} precision={2} />x / <AnimatedNumber value={portfolio.netLeverage} precision={2} />x
           </span>
           <span className="text-[10px] font-mono text-slate-500 mt-1 block">
             Max Barrier: 3.00x
@@ -223,8 +286,8 @@ export const PortfolioView: React.FC<PortfolioViewProps> = ({
 
         <div className="bg-slate-900 border border-slate-800 p-3 rounded-lg">
           <span className="text-[11px] font-mono text-slate-400 block">99% CVaR Tail Risk</span>
-          <span className="text-lg font-bold font-mono text-rose-400 mt-1 block">
-            ${portfolio.cvar99Usd.toLocaleString()}
+          <span className="text-lg font-bold font-mono text-rose-400 mt-1 block tabular-nums">
+            <AnimatedCurrency value={portfolio.cvar99Usd} precision={0} />
           </span>
           <span className="text-[10px] font-mono text-slate-500 mt-1 block">
             Limit: $25,000 budget
@@ -233,11 +296,11 @@ export const PortfolioView: React.FC<PortfolioViewProps> = ({
 
         <div className="bg-slate-900 border border-slate-800 p-3 rounded-lg">
           <span className="text-[11px] font-mono text-slate-400 block">Peak Drawdown</span>
-          <span className="text-lg font-bold font-mono text-amber-400 mt-1 block">
-            -{portfolio.currentDrawdownPct.toFixed(2)}%
+          <span className="text-lg font-bold font-mono text-amber-400 mt-1 block tabular-nums">
+            -<AnimatedPercent value={portfolio.currentDrawdownPct} precision={2} />
           </span>
-          <span className="text-[10px] font-mono text-slate-500 mt-1 block">
-            Historical Max: -{portfolio.maxDrawdownPct.toFixed(2)}%
+          <span className="text-[10px] font-mono text-slate-500 mt-1 block tabular-nums">
+            Historical Max: -<AnimatedPercent value={portfolio.maxDrawdownPct} precision={2} />
           </span>
         </div>
       </div>
@@ -337,17 +400,29 @@ export const PortfolioView: React.FC<PortfolioViewProps> = ({
                           {pos.direction}
                         </span>
                       </td>
-                      <td className="py-2.5 text-slate-300">{pos.quantity}</td>
-                      <td className="py-2.5 text-slate-300">${pos.entryPrice.toLocaleString()}</td>
-                      <td className="py-2.5 font-bold text-slate-100">${pos.currentPrice.toLocaleString()}</td>
-                      <td className="py-2.5 text-slate-200">${pos.allocatedUsd.toLocaleString()}</td>
-                      <td className="py-2.5">
+                      <td className="py-2.5 text-slate-300 tabular-nums">
+                        <AnimatedNumber value={pos.quantity} precision={pos.quantity < 1 ? 4 : 2} />
+                      </td>
+                      <td className="py-2.5 text-slate-300 tabular-nums">
+                        <AnimatedCurrency value={pos.entryPrice} precision={pos.entryPrice < 10 ? 4 : 2} />
+                      </td>
+                      <td className="py-2.5 font-bold text-slate-100 tabular-nums">
+                        <AnimatedCurrency value={pos.currentPrice} precision={pos.currentPrice < 10 ? 4 : 2} />
+                      </td>
+                      <td className="py-2.5 text-slate-200 tabular-nums">
+                        <AnimatedCurrency value={pos.allocatedUsd} precision={2} />
+                      </td>
+                      <td className="py-2.5 tabular-nums">
                         <span className={`font-bold ${isPositive ? 'text-emerald-400' : 'text-rose-400'}`}>
-                          {isPositive ? '+' : ''}${pos.unrealizedPnl.toLocaleString()} ({isPositive ? '+' : ''}{pos.unrealizedPnlPct.toFixed(2)}%)
+                          <AnimatedCurrency value={pos.unrealizedPnl} showSign={true} precision={2} /> (<AnimatedPercent value={pos.unrealizedPnlPct} showSign={true} precision={2} />)
                         </span>
                       </td>
-                      <td className="py-2.5 text-rose-400 text-[11px]">${pos.stopLossPrice.toLocaleString()}</td>
-                      <td className="py-2.5 text-emerald-400 text-[11px]">${pos.takeProfitPrice.toLocaleString()}</td>
+                      <td className="py-2.5 text-rose-400 text-[11px] tabular-nums">
+                        <AnimatedCurrency value={pos.stopLossPrice} precision={pos.stopLossPrice < 10 ? 4 : 2} />
+                      </td>
+                      <td className="py-2.5 text-emerald-400 text-[11px] tabular-nums">
+                        <AnimatedCurrency value={pos.takeProfitPrice} precision={pos.takeProfitPrice < 10 ? 4 : 2} />
+                      </td>
                       <td className="py-2.5 text-right">
                         <button
                           onClick={() => onClosePosition(pos.symbol)}
@@ -367,16 +442,36 @@ export const PortfolioView: React.FC<PortfolioViewProps> = ({
 
       {/* Execution Orders Log */}
       <div className="bg-slate-900 border border-slate-800 rounded-lg p-4">
-        <div className="flex items-center justify-between mb-3 border-b border-slate-800 pb-2">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between mb-3 border-b border-slate-800 pb-2 gap-2">
           <div className="flex items-center gap-2">
             <ShieldAlert className="w-4 h-4 text-blue-400" />
             <h3 className="text-xs font-bold font-mono text-slate-200 uppercase tracking-wider">
               Execution Orders &amp; Routing Fills ({orders.length})
             </h3>
           </div>
-          <span className="text-[11px] font-mono text-slate-500">
-            DMA / TWAP / VWAP / ICEBERG EXECUTION LOG
-          </span>
+          <div className="flex items-center gap-2.5">
+            <button
+              id="export-orders-csv-btn"
+              onClick={handleExportOrdersCsv}
+              disabled={orders.length === 0}
+              title="Export current execution orders buffer to a CSV file for external audit and analysis"
+              className={`px-2.5 py-1 text-xs font-mono rounded flex items-center gap-1.5 transition-all border select-none ${
+                orders.length === 0
+                  ? 'bg-slate-800/40 text-slate-500 border-slate-800 cursor-not-allowed'
+                  : exportNotice
+                  ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/50 shadow-[0_0_10px_rgba(16,185,129,0.3)]'
+                  : 'bg-slate-800/80 text-cyan-300 border-cyan-500/40 hover:bg-cyan-500/15 hover:border-cyan-400 hover:text-cyan-200 active:scale-95 shadow-sm'
+              }`}
+            >
+              <Download className={`w-3.5 h-3.5 ${exportNotice ? 'text-emerald-400' : 'text-cyan-400'}`} />
+              <span className="font-semibold whitespace-nowrap">
+                {exportNotice || `Export CSV (${orders.length})`}
+              </span>
+            </button>
+            <span className="text-[11px] font-mono text-slate-500 hidden md:inline">
+              DMA / TWAP / VWAP / ICEBERG EXECUTION LOG
+            </span>
+          </div>
         </div>
 
         {orders.length === 0 ? (
@@ -395,7 +490,7 @@ export const PortfolioView: React.FC<PortfolioViewProps> = ({
                   <th className="pb-2 font-medium">QTY</th>
                   <th className="pb-2 font-medium">FILL PRICE</th>
                   <th className="pb-2 font-medium">SLIPPAGE</th>
-                  <th className="pb-2 font-medium">EXCHANGE FEE</th>
+                  <th className="pb-2 font-medium">EXCHANGE FEE (≥0.04%)</th>
                   <th className="pb-2 font-medium">ROUTING ALGO</th>
                   <th className="pb-2 font-medium">STATUS</th>
                 </tr>
@@ -422,7 +517,7 @@ export const PortfolioView: React.FC<PortfolioViewProps> = ({
                     <td className="py-2 text-slate-200">{ord.quantity}</td>
                     <td className="py-2 font-bold text-slate-100">${ord.filledPrice.toLocaleString()}</td>
                     <td className="py-2 text-amber-400">{ord.slippageBps} bps</td>
-                    <td className="py-2 text-slate-400">${ord.feeUsd.toFixed(2)}</td>
+                    <td className="py-2 text-amber-400 font-mono font-medium">${ord.feeUsd.toFixed(2)}</td>
                     <td className="py-2 text-blue-400 text-[11px] font-semibold">{ord.executionRoute}</td>
                     <td className="py-2">
                       <span className="text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 rounded text-[10px]">

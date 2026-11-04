@@ -1,6 +1,7 @@
 import React from 'react';
 import { TrendingUp, TrendingDown, DollarSign, ShieldAlert, BarChart3, Activity, PieChart } from 'lucide-react';
 import { PortfolioState, Position } from '../types/trading';
+import { AnimatedNumber, AnimatedCurrency, AnimatedPercent } from './AnimatedNumber';
 
 interface PortfolioStatsProps {
   portfolio: PortfolioState;
@@ -8,62 +9,64 @@ interface PortfolioStatsProps {
 }
 
 export const PortfolioStats: React.FC<PortfolioStatsProps> = ({ portfolio, onClosePosition }) => {
-  const isPnlPositive = portfolio.realizedPnl + portfolio.unrealizedPnl >= 0;
+  const totalPnl = portfolio.realizedPnl + portfolio.unrealizedPnl;
+  const isPnlPositive = totalPnl >= 0;
   const winRate = portfolio.totalTrades > 0
     ? Math.round((portfolio.winningTrades / portfolio.totalTrades) * 100)
     : 0;
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 gpu-accelerate">
       {/* Primary KPI Grid */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
         {/* NAV Card */}
-        <div className="bg-slate-900/90 border border-slate-800/80 rounded-xl p-3.5 shadow-sm">
+        <div className="bg-slate-900/90 border border-slate-800/80 rounded-xl p-3.5 shadow-sm hover:border-cyan-500/30 transition-all">
           <div className="flex items-center justify-between text-xs text-slate-400 font-mono">
             <span>PORTFOLIO NAV</span>
             <DollarSign className="w-3.5 h-3.5 text-cyan-400" />
           </div>
           <div className="text-xl font-bold font-mono text-white mt-1">
-            ${portfolio.navUsd.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            <AnimatedCurrency value={portfolio.navUsd} precision={2} />
           </div>
           <div className={`text-xs font-mono mt-1 flex items-center gap-1 ${portfolio.dailyPnlPct >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
             {portfolio.dailyPnlPct >= 0 ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
-            <span>{portfolio.dailyPnlPct >= 0 ? '+' : ''}{portfolio.dailyPnlPct.toFixed(2)}% Today</span>
+            <AnimatedPercent value={portfolio.dailyPnlPct} precision={2} showSign={true} />
+            <span className="text-slate-500 text-[10px]">Today</span>
           </div>
         </div>
 
         {/* Realized & Unrealized PnL */}
-        <div className="bg-slate-900/90 border border-slate-800/80 rounded-xl p-3.5 shadow-sm">
+        <div className="bg-slate-900/90 border border-slate-800/80 rounded-xl p-3.5 shadow-sm hover:border-emerald-500/30 transition-all">
           <div className="flex items-center justify-between text-xs text-slate-400 font-mono">
             <span>TOTAL PnL</span>
             <Activity className="w-3.5 h-3.5 text-emerald-400" />
           </div>
           <div className={`text-xl font-bold font-mono mt-1 ${isPnlPositive ? 'text-emerald-400' : 'text-rose-400'}`}>
-            {isPnlPositive ? '+' : ''}${(portfolio.realizedPnl + portfolio.unrealizedPnl).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            <AnimatedCurrency value={totalPnl} precision={2} showSign={true} />
           </div>
           <div className="text-[11px] font-mono text-slate-400 mt-1 flex justify-between">
-            <span>Real: ${portfolio.realizedPnl.toFixed(0)}</span>
-            <span>Unreal: ${portfolio.unrealizedPnl.toFixed(0)}</span>
+            <span>Real: <AnimatedCurrency value={portfolio.realizedPnl} precision={0} /></span>
+            <span>Unreal: <AnimatedCurrency value={portfolio.unrealizedPnl} precision={0} /></span>
           </div>
         </div>
 
         {/* Gross & Net Leverage */}
-        <div className="bg-slate-900/90 border border-slate-800/80 rounded-xl p-3.5 shadow-sm">
+        <div className="bg-slate-900/90 border border-slate-800/80 rounded-xl p-3.5 shadow-sm hover:border-indigo-500/30 transition-all">
           <div className="flex items-center justify-between text-xs text-slate-400 font-mono">
             <span>GROSS LEVERAGE</span>
             <PieChart className="w-3.5 h-3.5 text-indigo-400" />
           </div>
           <div className="text-xl font-bold font-mono text-white mt-1">
-            {portfolio.grossLeverage.toFixed(2)}x
+            <AnimatedNumber value={portfolio.grossLeverage} precision={2} suffix="x" />
           </div>
           <div className="text-[11px] font-mono text-slate-400 mt-1 flex items-center justify-between">
-            <span>Net: {portfolio.netLeverage.toFixed(2)}x</span>
+            <span>Net: <AnimatedNumber value={portfolio.netLeverage} precision={2} suffix="x" /></span>
             <span className="text-cyan-400">Max: 3.00x</span>
           </div>
         </div>
 
-        {/* Sharpe & Sortino */}
-        <div className="bg-slate-900/90 border border-slate-800/80 rounded-xl p-3.5 shadow-sm">
+        {/* Sharpe / Sortino */}
+        <div className="bg-slate-900/90 border border-slate-800/80 rounded-xl p-3.5 shadow-sm hover:border-amber-500/30 transition-all">
           <div className="flex items-center justify-between text-xs text-slate-400 font-mono">
             <span>SHARPE / SORTINO</span>
             <BarChart3 className="w-3.5 h-3.5 text-amber-400" />
@@ -72,36 +75,36 @@ export const PortfolioStats: React.FC<PortfolioStatsProps> = ({ portfolio, onClo
             2.84 <span className="text-xs text-slate-400 font-normal">/ 3.42</span>
           </div>
           <div className="text-[11px] font-mono text-slate-400 mt-1">
-            Win Rate: <span className="text-emerald-400">{winRate}%</span> ({portfolio.winningTrades}/{portfolio.totalTrades})
+            Win Rate: <span className="text-emerald-400"><AnimatedNumber value={winRate} precision={0} suffix="%" /></span> ({portfolio.winningTrades}/{portfolio.totalTrades})
           </div>
         </div>
 
         {/* 99% CVaR Tail Risk */}
-        <div className="bg-slate-900/90 border border-slate-800/80 rounded-xl p-3.5 shadow-sm">
+        <div className="bg-slate-900/90 border border-slate-800/80 rounded-xl p-3.5 shadow-sm hover:border-purple-500/30 transition-all">
           <div className="flex items-center justify-between text-xs text-slate-400 font-mono">
             <span>99% 1D CVaR</span>
             <ShieldAlert className="w-3.5 h-3.5 text-purple-400" />
           </div>
           <div className="text-xl font-bold font-mono text-purple-300 mt-1">
-            ${portfolio.cvar99Usd.toLocaleString()}
+            <AnimatedCurrency value={portfolio.cvar99Usd} precision={0} />
           </div>
           <div className="text-[11px] font-mono text-slate-400 mt-1 flex justify-between">
-            <span>VaR: ${portfolio.var99Usd.toLocaleString()}</span>
+            <span>VaR: <AnimatedCurrency value={portfolio.var99Usd} precision={0} /></span>
             <span className="text-purple-400">Budget: $25k</span>
           </div>
         </div>
 
         {/* Peak-to-Trough Drawdown */}
-        <div className="bg-slate-900/90 border border-slate-800/80 rounded-xl p-3.5 shadow-sm">
+        <div className="bg-slate-900/90 border border-slate-800/80 rounded-xl p-3.5 shadow-sm hover:border-rose-500/30 transition-all">
           <div className="flex items-center justify-between text-xs text-slate-400 font-mono">
             <span>PEAK DRAWDOWN</span>
             <TrendingDown className="w-3.5 h-3.5 text-rose-400" />
           </div>
           <div className="text-xl font-bold font-mono text-rose-300 mt-1">
-            -{portfolio.currentDrawdownPct.toFixed(2)}%
+            <AnimatedNumber value={-portfolio.currentDrawdownPct} precision={2} suffix="%" />
           </div>
           <div className="text-[11px] font-mono text-slate-400 mt-1 flex justify-between">
-            <span>Max DD: -{portfolio.maxDrawdownPct.toFixed(2)}%</span>
+            <span>Max DD: <AnimatedNumber value={-portfolio.maxDrawdownPct} precision={2} suffix="%" /></span>
             <span className="text-rose-400">Stop: -6.0%</span>
           </div>
         </div>
@@ -111,13 +114,13 @@ export const PortfolioStats: React.FC<PortfolioStatsProps> = ({ portfolio, onClo
       <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-sm">
         <div className="px-4 py-2.5 border-b border-slate-800 bg-slate-950/60 flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-cyan-400"></span>
+            <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse"></span>
             <h3 className="text-xs font-mono font-bold text-slate-200 uppercase tracking-wider">
               ACTIVE PORTFOLIO POSITIONS ({portfolio.positions.length})
             </h3>
           </div>
           <span className="text-[11px] font-mono text-slate-400">
-            Available Free Cash: ${portfolio.cashUsd.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+            Available Free Cash: <AnimatedCurrency value={portfolio.cashUsd} precision={0} />
           </span>
         </div>
 
@@ -160,18 +163,27 @@ export const PortfolioStats: React.FC<PortfolioStatsProps> = ({ portfolio, onClo
                           {pos.direction}
                         </span>
                       </td>
-                      <td className="py-2.5 px-3 text-slate-300">{pos.quantity}</td>
-                      <td className="py-2.5 px-3 text-slate-300">${pos.entryPrice.toLocaleString()}</td>
-                      <td className="py-2.5 px-3 text-slate-200 font-semibold">${pos.currentPrice.toLocaleString()}</td>
-                      <td className="py-2.5 px-3 text-slate-400">${pos.allocatedUsd.toLocaleString()}</td>
+                      <td className="py-2.5 px-3 text-slate-300">
+                        <AnimatedNumber value={pos.quantity} precision={3} />
+                      </td>
+                      <td className="py-2.5 px-3 text-slate-300">
+                        <AnimatedCurrency value={pos.entryPrice} precision={2} />
+                      </td>
+                      <td className="py-2.5 px-3 text-slate-200 font-semibold">
+                        <AnimatedCurrency value={pos.currentPrice} precision={2} />
+                      </td>
+                      <td className="py-2.5 px-3 text-slate-400">
+                        <AnimatedCurrency value={pos.allocatedUsd} precision={0} />
+                      </td>
                       <td className="py-2.5 px-3 font-semibold">
                         <span className={isProfit ? 'text-emerald-400' : 'text-rose-400'}>
-                          {isProfit ? '+' : ''}${pos.unrealizedPnl.toFixed(2)} ({isProfit ? '+' : ''}{pos.unrealizedPnlPct.toFixed(2)}%)
+                          <AnimatedCurrency value={pos.unrealizedPnl} precision={2} showSign={true} /> (
+                          <AnimatedPercent value={pos.unrealizedPnlPct} precision={2} showSign={true} />)
                         </span>
                       </td>
                       <td className="py-2.5 px-3 text-[10px] text-slate-400">
-                        <div>SL: ${pos.stopLossPrice.toFixed(2)}</div>
-                        <div className="text-cyan-400">TP: ${pos.takeProfitPrice.toFixed(2)}</div>
+                        <div>SL: <AnimatedCurrency value={pos.stopLossPrice} precision={2} /></div>
+                        <div className="text-cyan-400">TP: <AnimatedCurrency value={pos.takeProfitPrice} precision={2} /></div>
                       </td>
                       <td className="py-2.5 px-4 text-right">
                         <button
@@ -192,3 +204,4 @@ export const PortfolioStats: React.FC<PortfolioStatsProps> = ({ portfolio, onClo
     </div>
   );
 };
+

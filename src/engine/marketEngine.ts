@@ -200,7 +200,9 @@ export function executeVerdict(
   const slippageMultiplier =
     verdict.direction === 'LONG' ? 1 + slippageBps / 10000 : 1 - slippageBps / 10000;
   const filledPrice = Math.round(currentPrice * slippageMultiplier * 100) / 100;
-  const feeUsd = Math.round(verdict.approvedSizeUsd * 0.0003 * 100) / 100; // 3 bps maker/taker fee
+  // Transaction fee rate: min 0.04% (4 bps) as required
+  const feeRate = Math.max(0.0004, verdict.executionParams?.feeBps ? verdict.executionParams.feeBps / 10000 : 0.0004);
+  const feeUsd = Math.max(0.01, Math.round(verdict.approvedSizeUsd * feeRate * 100) / 100); // min 0.04% transaction fee
 
   const executedOrder: ExecutionOrder = {
     id: `ORD-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
@@ -219,6 +221,8 @@ export function executeVerdict(
   // Update or create position
   const existingPosIndex = portfolio.positions.findIndex((p) => p.symbol === verdict.symbol);
   let newPositions = [...portfolio.positions];
+  let realizedPnlDelta = 0;
+  let exitFeeUsd = 0;
 
   const stopDistancePct = 0.025; // 2.5% stop loss
   const tpDistancePct = 0.055; // 5.5% take profit
@@ -246,10 +250,14 @@ export function executeVerdict(
       };
     } else {
       // Opposite direction closes or reduces position
-      const pnl =
+      const closedQty = Math.min(existing.quantity, quantity);
+      const closeNotional = closedQty * filledPrice;
+      exitFeeUsd = Math.max(0.01, Math.round(closeNotional * feeRate * 100) / 100);
+      const grossPnl =
         existing.direction === 'LONG'
-          ? (filledPrice - existing.entryPrice) * Math.min(existing.quantity, quantity)
-          : (existing.entryPrice - filledPrice) * Math.min(existing.quantity, quantity);
+          ? (filledPrice - existing.entryPrice) * closedQty
+          : (existing.entryPrice - filledPrice) * closedQty;
+      realizedPnlDelta = grossPnl - exitFeeUsd;
 
       if (quantity >= existing.quantity) {
         // Closed position completely
@@ -281,10 +289,13 @@ export function executeVerdict(
   }
 
   // Update cash and NAV
-  const newCash = portfolio.cashUsd - feeUsd;
+  const totalTradeFees = feeUsd + exitFeeUsd;
+  const newCash = portfolio.cashUsd - feeUsd + realizedPnlDelta;
   const updatedPortfolio = recalculatePortfolio({
     ...portfolio,
     cashUsd: newCash,
+    realizedPnl: Math.round((portfolio.realizedPnl + realizedPnlDelta) * 100) / 100,
+    totalFeesUsd: Math.round(((portfolio.totalFeesUsd || 0) + totalTradeFees) * 100) / 100,
     positions: newPositions,
     totalTrades: portfolio.totalTrades + 1,
   }, { [verdict.symbol]: marketBook || createMockBook(verdict.symbol, filledPrice, 0.1, 1000000) });
@@ -368,6 +379,7 @@ export function createInitialPortfolio(initialCapital: number = 100000): Portfol
     sharpeRatio: 0,
     var99Usd: 0,
     cvar99Usd: 0,
+    totalFeesUsd: 0,
     positions: [],
   };
 }

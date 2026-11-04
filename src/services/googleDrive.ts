@@ -10,14 +10,30 @@ export async function searchDriveFiles(
     throw new Error('Access token is required to query Google Drive');
   }
 
-  // Construct query: matches title or full text
-  // We sanitize searchQuery for single quotes
-  const safeQuery = searchQuery.replace(/'/g, "\\'");
-  const q = `trashed = false and (name contains '${safeQuery}' or fullText contains '${safeQuery}')`;
+  // Construct query: matches filename using Drive readonly scope
+  // Note: 'fullText contains' requires broader write scope (https://www.googleapis.com/auth/drive),
+  // whereas 'name contains' works seamlessly with https://www.googleapis.com/auth/drive.readonly.
+  const trimmed = (searchQuery || '').trim();
+  let q = 'trashed = false';
+  if (trimmed) {
+    const words = trimmed.split(/\s+/).filter(Boolean);
+    if (words.length === 1) {
+      const safeWord = words[0].replace(/'/g, "\\'");
+      q = `trashed = false and name contains '${safeWord}'`;
+    } else if (words.length > 1) {
+      const nameClauses = words
+        .map((w) => `name contains '${w.replace(/'/g, "\\'")}'`)
+        .join(' or ');
+      q = `trashed = false and (${nameClauses})`;
+    }
+  }
 
   const url = new URL(`${DRIVE_API_BASE}/files`);
   url.searchParams.append('q', q);
-  url.searchParams.append('fields', 'files(id, name, mimeType, modifiedTime, size, description, webViewLink)');
+  url.searchParams.append(
+    'fields',
+    'files(id, name, mimeType, modifiedTime, size, description, webViewLink)'
+  );
   url.searchParams.append('pageSize', '30');
   url.searchParams.append('orderBy', 'modifiedTime desc');
 
@@ -30,6 +46,19 @@ export async function searchDriveFiles(
 
   if (!response.ok) {
     const errData = await response.json().catch(() => ({}));
+    if (response.status === 401) {
+      throw new Error('Google Drive session expired or invalid. Please sign out and sign in with Google again.');
+    }
+    if (response.status === 403) {
+      if (
+        errData.error?.message?.toLowerCase().includes('insufficient') ||
+        errData.error?.status === 'PERMISSION_DENIED'
+      ) {
+        throw new Error(
+          'Google Drive access scope requires re-authorization. Please sign in with Google to grant drive access.'
+        );
+      }
+    }
     throw new Error(
       errData.error?.message || `Google Drive API error: ${response.status} ${response.statusText}`
     );
@@ -71,6 +100,9 @@ export async function fetchFileContent(
       headers: { Authorization: `Bearer ${accessToken}` },
     });
     if (!res.ok) {
+      if (res.status === 401 || res.status === 403) {
+        throw new Error('Google Drive access unauthorized. Please sign out and sign in again to grant permissions.');
+      }
       throw new Error(`Failed to export Google Doc: ${res.statusText}`);
     }
     return await res.text();
@@ -83,6 +115,9 @@ export async function fetchFileContent(
   });
 
   if (!res.ok) {
+    if (res.status === 401 || res.status === 403) {
+      throw new Error('Google Drive access unauthorized. Please sign out and sign in again to grant permissions.');
+    }
     throw new Error(`Failed to fetch file content: ${res.statusText}`);
   }
 

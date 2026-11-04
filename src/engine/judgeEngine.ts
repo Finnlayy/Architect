@@ -271,6 +271,7 @@ export function adjudicateSignal(
       urgency,
       limitPrice: Math.round(limitPrice * 100) / 100,
       maxSlippageBps,
+      feeBps: 4.0, // min 0.04% transaction fee
     },
   };
 }

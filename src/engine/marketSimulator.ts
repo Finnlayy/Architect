@@ -146,7 +146,9 @@ export function executeVerdict(
   const filledPrice = Math.round(midPrice * slippageMultiplier * 100) / 100;
 
   const quantity = Math.round((verdict.approvedSizeUsd / filledPrice) * 10000) / 10000;
-  const feeUsd = Math.round(verdict.approvedSizeUsd * 0.0003 * 100) / 100; // 3 bps taker fee
+  // Transaction fee rate: min 0.04% (4 bps)
+  const feeRate = Math.max(0.0004, verdict.executionParams?.feeBps ? verdict.executionParams.feeBps / 10000 : 0.0004);
+  const feeUsd = Math.max(0.01, Math.round(verdict.approvedSizeUsd * feeRate * 100) / 100); // min 0.04% fee
 
   const executionOrder: ExecutionOrder = {
     id: `ORD-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
@@ -166,6 +168,7 @@ export function executeVerdict(
   const existingPosIndex = portfolio.positions.findIndex((p) => p.symbol === verdict.symbol);
   let updatedPositions = [...portfolio.positions];
   let realizedPnlDelta = 0;
+  let exitFeeUsd = 0;
   let winningDelta = 0;
   let losingDelta = 0;
 
@@ -184,11 +187,13 @@ export function executeVerdict(
       };
     } else {
       // Opposite direction: close or flip
+      const closedQty = Math.min(currentPos.quantity, quantity);
+      exitFeeUsd = Math.max(0.01, Math.round(closedQty * filledPrice * feeRate * 100) / 100);
       const pnl = currentPos.direction === 'LONG'
-        ? (filledPrice - currentPos.entryPrice) * Math.min(currentPos.quantity, quantity)
-        : (currentPos.entryPrice - filledPrice) * Math.min(currentPos.quantity, quantity);
+        ? (filledPrice - currentPos.entryPrice) * closedQty
+        : (currentPos.entryPrice - filledPrice) * closedQty;
 
-      realizedPnlDelta = pnl - feeUsd;
+      realizedPnlDelta = pnl - feeUsd - exitFeeUsd;
       if (realizedPnlDelta > 0) winningDelta = 1;
       else losingDelta = 1;
 
@@ -267,6 +272,7 @@ export function executeVerdict(
     dailyPnlPct: portfolio.peakNav > 0 ? Math.round(((updatedNav - portfolio.peakNav) / portfolio.peakNav) * 10000) / 100 : 0,
     cvar99Usd,
     var99Usd,
+    totalFeesUsd: Math.round(((portfolio.totalFeesUsd || 0) + feeUsd + exitFeeUsd) * 100) / 100,
     positions: updatedPositions,
   };
 

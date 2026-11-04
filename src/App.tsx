@@ -10,6 +10,7 @@ import { DriveBlueprintModal } from './components/DriveBlueprintModal';
 import { WorkerBotsView } from './components/WorkerBotsView';
 import { ConnectionHistoryModal } from './components/ConnectionHistoryModal';
 import { KrakenCliView } from './components/KrakenCliView';
+import { OmegaAgentConsole } from './components/OmegaAgentConsole';
 import { KrakenFourTasksBar } from './components/KrakenFourTasksBar';
 import {
   fetchAuthoritativeBalance,
@@ -567,6 +568,11 @@ export default function App() {
           latencyMs: kraken.latencyMs,
           messagesCount: kraken.messagesCount,
           onReconnect: kraken.reconnect,
+          onForceRecalibrate: async () => {
+            const res = await kraken.forceRecalibrate();
+            await syncAuthoritativeBalance();
+            return res;
+          },
           isRealData: kraken.isRealKrakenData,
           reconnectAttempt: kraken.reconnectAttempt,
           nextRetryDelayMs: kraken.nextRetryDelayMs,
@@ -592,6 +598,8 @@ export default function App() {
             onInjectTestSignal={handleInjectTestSignal}
           />
         )}
+
+        {activeTab === 'agent' && <OmegaAgentConsole />}
 
         {activeTab === 'swarm' && (
           <SwarmView

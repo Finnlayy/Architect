@@ -15,6 +15,7 @@ import {
   Scale,
   Activity,
   Sliders,
+  Cpu,
 } from 'lucide-react';
 import {
   fetchPaperBridgeStatus,
@@ -175,6 +176,16 @@ export const KrakenFourTasksBar: React.FC<KrakenFourTasksBarProps> = ({
             <Play className="w-3 h-3 text-amber-400 fill-amber-400" />
             <span>Execute All 4 Tasks</span>
           </button>
+          {onNavigateToTab && (
+            <button
+              onClick={() => onNavigateToTab('agent')}
+              className="px-2 py-1 rounded bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 text-[11px] font-bold flex items-center gap-1 transition"
+              title="Open OMEGA-NIO Autonomous Agent (7-Stage State Graph)"
+            >
+              <Cpu className="w-3 h-3 text-cyan-400" />
+              <span>OMEGA Agent</span>
+            </button>
+          )}
         </div>
 
         {/* The 4 Chips from the User Request Images */}

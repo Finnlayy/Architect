@@ -22,6 +22,7 @@ import {
   ShieldCheck,
 } from 'lucide-react';
 import { StrategyAgent, RawSignal } from '../types/trading';
+import { AnimatedNumber, AnimatedPercent } from './AnimatedNumber';
 
 interface StrategyAlphaChartProps {
   strategies: StrategyAgent[];
@@ -217,12 +218,12 @@ export const StrategyAlphaChart: React.FC<StrategyAlphaChartProps> = ({
               Type: <span className="text-slate-200">{topPerformer?.type}</span>
             </div>
           </div>
-          <div className="text-right pl-2">
+          <div className="text-right pl-2 tabular-nums">
             <div className="text-sm font-bold text-emerald-400">
-              +{topPerformer?.avgAlphaBps || 0} bps
+              <AnimatedNumber value={topPerformer?.avgAlphaBps || 0} precision={1} showSign={true} suffix=" bps" />
             </div>
             <div className="text-[10px] text-emerald-500/80">
-              SR {topPerformer?.sharpeRatio.toFixed(2)}
+              SR <AnimatedNumber value={topPerformer?.sharpeRatio || 0} precision={2} />
             </div>
           </div>
         </div>
@@ -234,17 +235,22 @@ export const StrategyAlphaChart: React.FC<StrategyAlphaChartProps> = ({
               <Sparkles className="w-3 h-3 text-amber-400" />
               SWARM BENCHMARK MEAN
             </div>
-            <div className="text-sm font-bold text-amber-400 mt-0.5">
-              +{swarmAvgAlpha} bps
+            <div className="text-sm font-bold text-amber-400 mt-0.5 tabular-nums">
+              <AnimatedNumber value={swarmAvgAlpha} precision={1} showSign={true} suffix=" bps" />
             </div>
             <div className="text-[10px] text-slate-400 mt-0.5">
-              Sample: {signals.length} live signals
+              Sample: <AnimatedNumber value={signals.length} precision={0} /> live signals
             </div>
           </div>
-          <div className="text-right text-[10px] text-slate-400">
+          <div className="text-right text-[10px] text-slate-400 tabular-nums">
             <div>Alpha Spread:</div>
             <div className="font-bold text-slate-200">
-              +{Math.round(((topPerformer?.avgAlphaBps || 0) - Math.min(...strategyMetrics.map(s => s.avgAlphaBps))) * 10) / 10} bps
+              <AnimatedNumber
+                value={Math.max(0, (topPerformer?.avgAlphaBps || 0) - Math.min(...strategyMetrics.map(s => s.avgAlphaBps)))}
+                precision={1}
+                showSign={true}
+                suffix=" bps"
+              />
             </div>
           </div>
         </div>
@@ -256,17 +262,25 @@ export const StrategyAlphaChart: React.FC<StrategyAlphaChartProps> = ({
               <Layers className="w-3 h-3 text-sky-400" />
               ABOVE SWARM MEAN
             </div>
-            <div className="text-sm font-bold text-sky-400 mt-0.5">
-              {strategyMetrics.filter(s => s.avgAlphaBps >= swarmAvgAlpha).length} of {strategies.length}
+            <div className="text-sm font-bold text-sky-400 mt-0.5 tabular-nums">
+              <AnimatedNumber value={strategyMetrics.filter(s => s.avgAlphaBps >= swarmAvgAlpha).length} precision={0} /> of {strategies.length}
             </div>
-            <div className="text-[10px] text-slate-400 mt-0.5">
-              {Math.round((strategyMetrics.filter(s => s.avgAlphaBps >= swarmAvgAlpha).length / strategies.length) * 100)}% outperforming
+            <div className="text-[10px] text-slate-400 mt-0.5 tabular-nums">
+              <AnimatedPercent
+                value={strategies.length > 0 ? (strategyMetrics.filter(s => s.avgAlphaBps >= swarmAvgAlpha).length / strategies.length) * 100 : 0}
+                precision={0}
+                showSign={false}
+              /> outperforming
             </div>
           </div>
-          <div className="text-right text-[10px] text-slate-400">
+          <div className="text-right text-[10px] text-slate-400 tabular-nums">
             <div>Allocation:</div>
             <div className="font-bold text-slate-200">
-              {Math.round(strategyMetrics.filter(s => s.avgAlphaBps >= swarmAvgAlpha).reduce((acc, s) => acc + s.weight, 0) * 100)}% cap
+              <AnimatedPercent
+                value={strategyMetrics.filter(s => s.avgAlphaBps >= swarmAvgAlpha).reduce((acc, s) => acc + s.weight, 0) * 100}
+                precision={0}
+                showSign={false}
+              /> cap
             </div>
           </div>
         </div>
@@ -278,16 +292,18 @@ export const StrategyAlphaChart: React.FC<StrategyAlphaChartProps> = ({
               <Zap className="w-3 h-3 text-emerald-400" />
               ACTIVE GENERATORS
             </div>
-            <div className="text-sm font-bold text-emerald-400 mt-0.5">
-              {strategyMetrics.filter(s => s.signalCount > 0).length} / {strategies.length} Active
+            <div className="text-sm font-bold text-emerald-400 mt-0.5 tabular-nums">
+              <AnimatedNumber value={strategyMetrics.filter(s => s.signalCount > 0).length} precision={0} /> / {strategies.length} Active
             </div>
             <div className="text-[10px] text-slate-400 mt-0.5">
               Continuous L2 telemetry
             </div>
           </div>
-          <div className="text-right text-[10px] text-slate-400">
+          <div className="text-right text-[10px] text-slate-400 tabular-nums">
             <div>Buffer Depth:</div>
-            <div className="font-bold text-slate-200">{signals.length} ticks</div>
+            <div className="font-bold text-slate-200">
+              <AnimatedNumber value={signals.length} precision={0} suffix=" ticks" />
+            </div>
           </div>
         </div>
       </div>

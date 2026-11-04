@@ -442,7 +442,20 @@ export function updateWorkerBotsWithMarket(
     const unrealizedPct = Math.round(pnlRatio * leverage * 10000) / 100;
 
     const realizedProfit = bot.metrics?.realizedProfit ?? bot.currentProfitUsd ?? 0;
-    const totalProfit = Math.round((realizedProfit + unrealizedValue) * 100) / 100;
+    const dcaSteps = bot.metrics?.dcaSteps ?? 100;
+    const dcaOrdersTriggered = bot.metrics?.dcaOrdersTriggered ?? bot.dcaOrdersTriggered ?? 0;
+    const fundingFees = bot.metrics?.fundingFees ?? 0;
+
+    // Transaction fee calculation (strictly adhering to min 0.04% / 4 bps per trade fill)
+    const minFeeRate = 0.0004; // min 0.04%
+    const trancheSizeUsd = positionNominal / Math.max(dcaSteps, 1);
+    const totalTradedVolumeUsd = positionNominal + (dcaOrdersTriggered * trancheSizeUsd);
+    const transactionFees = Math.max(0.01, Math.round(totalTradedVolumeUsd * minFeeRate * 100) / 100);
+    const totalFees = Math.round((transactionFees + Math.abs(fundingFees)) * 100) / 100;
+
+    const grossProfit = Math.round((realizedProfit + unrealizedValue) * 100) / 100;
+    const netProfit = Math.round((grossProfit - totalFees) * 100) / 100;
+    const totalProfit = netProfit;
     const roi = investment > 0 ? Math.round((totalProfit / investment) * 10000) / 100 : 0;
 
     // Liquidation distance
@@ -453,6 +466,11 @@ export function updateWorkerBotsWithMarket(
       ...bot.metrics,
       liquidationPrice: liqPrice,
       liquidationDistancePct: liqDist,
+      transactionFees,
+      feeRatePct: 0.04,
+      grossProfit,
+      totalFees,
+      netProfit,
     };
 
     const updatedUnrealized = {

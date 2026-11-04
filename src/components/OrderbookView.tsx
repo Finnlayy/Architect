@@ -11,8 +11,10 @@ import {
   Radio,
   ShieldCheck,
   History,
+  Waves,
 } from 'lucide-react';
 import { OrderbookData } from '../types/trading';
+import { AnimatedNumber, AnimatedCurrency } from './AnimatedNumber';
 
 interface OrderbookViewProps {
   markets: Record<string, OrderbookData>;
@@ -50,7 +52,7 @@ export const OrderbookView: React.FC<OrderbookViewProps> = ({ markets, onOpenCon
   const isLive = krakenStatus?.status === 'LIVE';
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 gpu-accelerate">
       {/* Live Kraken Market Stream Telemetry Banner */}
       <div className="bg-slate-900 border border-slate-800 rounded-xl p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 font-mono text-xs">
         <div className="flex items-center gap-3">
@@ -90,54 +92,48 @@ export const OrderbookView: React.FC<OrderbookViewProps> = ({ markets, onOpenCon
         <div className="flex items-center gap-3 text-right">
           <div className="bg-slate-950 px-2.5 py-1 rounded border border-slate-800 text-[11px]">
             <span className="text-slate-500">Latenz:</span>{' '}
-            <span className="text-emerald-400 font-bold">{krakenStatus?.latencyMs ?? 1.2} ms</span>
+            <span className="text-emerald-400 font-bold">
+              <AnimatedNumber value={krakenStatus?.latencyMs ?? 1.2} precision={1} suffix=" ms" />
+            </span>
           </div>
           <div className="bg-slate-950 px-2.5 py-1 rounded border border-slate-800 text-[11px]">
             <span className="text-slate-500">Ticks:</span>{' '}
-            <span className="text-slate-200 font-bold">#{krakenStatus?.messagesCount ?? 0}</span>
+            <span className="text-slate-200 font-bold">
+              #<AnimatedNumber value={krakenStatus?.messagesCount ?? 0} precision={0} />
+            </span>
           </div>
           {onOpenConnectionHistory && (
             <button
               onClick={onOpenConnectionHistory}
-              className="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 flex items-center gap-1.5 transition-colors text-xs font-mono"
-              title="WebSocket Port 1000 Verbindungshistorie & Diagnostik öffnen"
+              title="WebSocket Verbindungsdiagnostik öffnen"
+              className="bg-slate-800 hover:bg-slate-700 text-slate-300 px-2 py-1 rounded border border-slate-700 flex items-center gap-1 text-[11px]"
             >
-              <History className="w-3 h-3 text-amber-400" />
-              <span>Diagnostik</span>
-            </button>
-          )}
-          {krakenStatus?.onReconnect && (
-            <button
-              onClick={krakenStatus.onReconnect}
-              className="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 flex items-center gap-1 transition-colors"
-              title="Kraken Stream neu verbinden"
-            >
-              <RefreshCw className="w-3 h-3" />
-              <span>Neu verbinden</span>
+              <History className="w-3.5 h-3.5 text-amber-400" />
+              <span>Historie</span>
             </button>
           )}
         </div>
       </div>
 
-      {/* Symbol Tabs Bar */}
-      <div className="bg-slate-900 border border-slate-800 rounded-lg p-3 flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
+      {/* Market Selector Tabs with Live Prices */}
+      <div className="flex flex-wrap items-center justify-between gap-3 bg-slate-900 border border-slate-800 rounded-xl p-3">
+        <div className="flex items-center gap-2 overflow-x-auto">
           {symbols.map((sym) => {
             const m = markets[sym];
-            const isSelected = activeSymbol === sym;
+            const isSelected = sym === activeSymbol;
             return (
               <button
                 key={sym}
                 onClick={() => setActiveSymbol(sym)}
-                className={`px-3 py-1.5 rounded text-xs font-mono font-bold transition-colors flex items-center gap-2 ${
+                className={`px-3 py-1.5 rounded text-xs font-mono font-bold transition-all flex items-center gap-2 ${
                   isSelected
-                    ? 'bg-slate-800 text-amber-400 border border-slate-700'
+                    ? 'bg-slate-800 text-amber-400 border border-slate-700 shadow-[0_0_10px_rgba(245,158,11,0.15)]'
                     : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
                 }`}
               >
                 <span>{sym}</span>
                 <span className="text-[11px] text-slate-100 font-normal">
-                  ${m.lastPrice.toLocaleString()}
+                  <AnimatedCurrency value={m.lastPrice} precision={2} />
                 </span>
               </button>
             );
@@ -145,24 +141,28 @@ export const OrderbookView: React.FC<OrderbookViewProps> = ({ markets, onOpenCon
         </div>
 
         {/* Microstructure Metrics Banner */}
-        <div className="flex items-center gap-4 text-xs font-mono">
-          <div className="flex items-center gap-1 bg-slate-950 px-2.5 py-1 rounded border border-slate-800">
+        <div className="flex items-center gap-4 text-xs font-mono flex-wrap">
+          <div className="flex items-center gap-1.5 bg-slate-950 px-2.5 py-1 rounded border border-slate-800">
             <span className="text-slate-400">Spread:</span>
-            <span className="text-slate-200 font-bold">${book.spread.toFixed(2)}</span>
-            <span className="text-amber-400 text-[10px]">({book.spreadBps} bps)</span>
-          </div>
-
-          <div className="flex items-center gap-1 bg-slate-950 px-2.5 py-1 rounded border border-slate-800">
-            <span className="text-slate-400">L2 Imbalance:</span>
-            <span className={`font-bold ${imbalanceRatio > 1.2 ? 'text-emerald-400' : imbalanceRatio < 0.8 ? 'text-rose-400' : 'text-slate-200'}`}>
-              {imbalanceRatio.toFixed(2)}
+            <span className="text-slate-200 font-bold">
+              <AnimatedCurrency value={book.spread} precision={2} />
+            </span>
+            <span className="text-amber-400 text-[10px]">
+              (<AnimatedNumber value={book.spreadBps} precision={1} suffix=" bps" />)
             </span>
           </div>
 
-          <div className="flex items-center gap-1 bg-slate-950 px-2.5 py-1 rounded border border-slate-800">
+          <div className="flex items-center gap-1.5 bg-slate-950 px-2.5 py-1 rounded border border-slate-800">
+            <span className="text-slate-400">L2 Imbalance:</span>
+            <span className={`font-bold ${imbalanceRatio > 1.2 ? 'text-emerald-400' : imbalanceRatio < 0.8 ? 'text-rose-400' : 'text-slate-200'}`}>
+              <AnimatedNumber value={imbalanceRatio} precision={2} />
+            </span>
+          </div>
+
+          <div className="flex items-center gap-1.5 bg-slate-950 px-2.5 py-1 rounded border border-slate-800">
             <span className="text-slate-400">VPIN Toxicity:</span>
             <span className={`font-bold ${vpinEstimate > 0.4 ? 'text-rose-400' : 'text-emerald-400'}`}>
-              {vpinEstimate.toFixed(3)}
+              <AnimatedNumber value={vpinEstimate} precision={3} />
             </span>
           </div>
         </div>
@@ -175,12 +175,15 @@ export const OrderbookView: React.FC<OrderbookViewProps> = ({ markets, onOpenCon
           <div className="flex items-center justify-between mb-3 border-b border-slate-800 pb-2">
             <div className="flex items-center gap-2">
               <Layers className="w-4 h-4 text-emerald-400" />
-              <h3 className="text-xs font-bold font-mono text-slate-200 uppercase tracking-wider">
-                Level-2 Deep Orderbook ({book.symbol})
+              <h3 className="text-xs font-bold font-mono text-slate-200 uppercase tracking-wider flex items-center gap-2">
+                <span>Level-2 Deep Orderbook ({book.symbol})</span>
+                <span className="text-[9px] px-1.5 py-0.2 rounded bg-emerald-950/60 text-emerald-400 border border-emerald-800">
+                  GPU ACCELERATED
+                </span>
               </h3>
             </div>
             <span className="text-[11px] font-mono text-slate-400">
-              24h Vol: ${(book.volume24h / 1000000).toFixed(1)}M
+              24h Vol: $<AnimatedNumber value={book.volume24h / 1000000} precision={1} suffix="M" />
             </span>
           </div>
 
@@ -194,20 +197,24 @@ export const OrderbookView: React.FC<OrderbookViewProps> = ({ markets, onOpenCon
               </div>
               <div className="space-y-1">
                 {book.bids.map((bid, idx) => {
-                  const depthPct = (bid.total / maxDepthTotal) * 100;
+                  const depthPct = Math.min(100, Math.max(0, (bid.total / maxDepthTotal) * 100));
                   return (
                     <div
                       key={`bid-${idx}`}
                       className="relative flex justify-between items-center text-xs font-mono py-1 px-1.5 rounded overflow-hidden"
                     >
                       <div
-                        className="absolute right-0 top-0 bottom-0 bg-emerald-500/10 pointer-events-none"
+                        className="absolute right-0 top-0 bottom-0 bg-emerald-500/15 pointer-events-none transition-all duration-300 ease-out"
                         style={{ width: `${depthPct}%` }}
                       />
-                      <span className="relative z-10 text-slate-400 text-[10px]">{bid.total.toFixed(2)}</span>
-                      <span className="relative z-10 text-slate-300 text-[11px]">{bid.size.toFixed(2)}</span>
+                      <span className="relative z-10 text-slate-400 text-[10px]">
+                        <AnimatedNumber value={bid.total} precision={2} flashOnUpdate={false} />
+                      </span>
+                      <span className="relative z-10 text-slate-300 text-[11px]">
+                        <AnimatedNumber value={bid.size} precision={2} flashOnUpdate={false} />
+                      </span>
                       <span className="relative z-10 text-emerald-400 font-bold">
-                        ${bid.price.toLocaleString()}
+                        <AnimatedCurrency value={bid.price} precision={2} />
                       </span>
                     </div>
                   );
@@ -224,25 +231,50 @@ export const OrderbookView: React.FC<OrderbookViewProps> = ({ markets, onOpenCon
               </div>
               <div className="space-y-1">
                 {book.asks.map((ask, idx) => {
-                  const depthPct = (ask.total / maxDepthTotal) * 100;
+                  const depthPct = Math.min(100, Math.max(0, (ask.total / maxDepthTotal) * 100));
                   return (
                     <div
                       key={`ask-${idx}`}
                       className="relative flex justify-between items-center text-xs font-mono py-1 px-1.5 rounded overflow-hidden"
                     >
                       <div
-                        className="absolute left-0 top-0 bottom-0 bg-rose-500/10 pointer-events-none"
+                        className="absolute left-0 top-0 bottom-0 bg-rose-500/15 pointer-events-none transition-all duration-300 ease-out"
                         style={{ width: `${depthPct}%` }}
                       />
                       <span className="relative z-10 text-rose-400 font-bold">
-                        ${ask.price.toLocaleString()}
+                        <AnimatedCurrency value={ask.price} precision={2} />
                       </span>
-                      <span className="relative z-10 text-slate-300 text-[11px]">{ask.size.toFixed(2)}</span>
-                      <span className="relative z-10 text-slate-400 text-[10px]">{ask.total.toFixed(2)}</span>
+                      <span className="relative z-10 text-slate-300 text-[11px]">
+                        <AnimatedNumber value={ask.size} precision={2} flashOnUpdate={false} />
+                      </span>
+                      <span className="relative z-10 text-slate-400 text-[10px]">
+                        <AnimatedNumber value={ask.total} precision={2} flashOnUpdate={false} />
+                      </span>
                     </div>
                   );
                 })}
               </div>
+            </div>
+          </div>
+
+          {/* Microstructure Spread & Depth Ribbon */}
+          <div className="mt-4 pt-3 border-t border-slate-800/80 flex items-center justify-between text-xs font-mono text-slate-400">
+            <div className="flex items-center gap-2">
+              <Waves className="w-4 h-4 text-cyan-400 animate-pulse" />
+              <span>CUMULATIVE DEPTH LIQUIDITY RATIO:</span>
+              <span className="text-slate-200 font-bold">
+                <AnimatedNumber value={maxBidTotal} precision={1} /> Bids
+              </span>
+              <span className="text-slate-500">/</span>
+              <span className="text-slate-200 font-bold">
+                <AnimatedNumber value={maxAskTotal} precision={1} /> Asks
+              </span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className="text-[10px] text-slate-500">SPREAD RATIO:</span>
+              <span className="text-cyan-400 font-bold">
+                <AnimatedNumber value={book.spread} precision={2} prefix="$" />
+              </span>
             </div>
           </div>
         </div>
@@ -263,7 +295,7 @@ export const OrderbookView: React.FC<OrderbookViewProps> = ({ markets, onOpenCon
             {book.recentTrades.map((t) => (
               <div
                 key={t.id}
-                className="flex items-center justify-between text-xs font-mono p-1.5 rounded bg-slate-950/70 border border-slate-800/50"
+                className="flex items-center justify-between text-xs font-mono p-1.5 rounded bg-slate-950/70 border border-slate-800/50 hover:border-slate-700 transition-colors"
               >
                 <div className="flex items-center gap-2">
                   <span
@@ -275,11 +307,15 @@ export const OrderbookView: React.FC<OrderbookViewProps> = ({ markets, onOpenCon
                   >
                     {t.side}
                   </span>
-                  <span className="text-slate-200 font-semibold">${t.price.toLocaleString()}</span>
+                  <span className="text-slate-200 font-semibold">
+                    <AnimatedCurrency value={t.price} precision={2} />
+                  </span>
                 </div>
 
                 <div className="flex items-center gap-2 text-slate-400 text-[11px]">
-                  <span>{t.size}</span>
+                  <span>
+                    <AnimatedNumber value={t.size} precision={2} flashOnUpdate={false} />
+                  </span>
                   <span className="text-[10px] text-slate-500">
                     {new Date(t.timestamp).toLocaleTimeString()}
                   </span>

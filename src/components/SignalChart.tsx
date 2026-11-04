@@ -14,6 +14,7 @@ import {
 } from 'recharts';
 import { Activity, Zap, TrendingUp, Filter, BarChart3, Gauge, ArrowUpRight, ArrowDownRight } from 'lucide-react';
 import { RawSignal, StrategyAgent } from '../types/trading';
+import { AnimatedNumber, AnimatedPercent } from './AnimatedNumber';
 
 interface SignalChartProps {
   signals: RawSignal[];
@@ -243,54 +244,54 @@ export const SignalChart: React.FC<SignalChartProps> = ({ signals, strategies })
       <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-2 pt-1 font-mono">
         <div className="bg-slate-950/80 p-2 rounded border border-slate-800/80">
           <div className="text-[10px] text-slate-500">SIGNAL CADENCE</div>
-          <div className="text-xs font-bold text-amber-400 flex items-center gap-1 mt-0.5">
+          <div className="text-xs font-bold text-amber-400 flex items-center gap-1 mt-0.5 tabular-nums">
             <Zap className="w-3 h-3" />
-            {stats.frequencyPerSec} sig/sec
+            <AnimatedNumber value={stats.frequencyPerSec} precision={1} suffix=" sig/sec" />
           </div>
         </div>
 
         <div className="bg-slate-950/80 p-2 rounded border border-slate-800/80">
           <div className="text-[10px] text-slate-500">SWARM CONVICTION</div>
-          <div className="text-xs font-bold text-emerald-400 flex items-center gap-1 mt-0.5">
+          <div className="text-xs font-bold text-emerald-400 flex items-center gap-1 mt-0.5 tabular-nums">
             <Gauge className="w-3 h-3" />
-            {stats.avgConf}%
+            <AnimatedPercent value={stats.avgConf} precision={0} showSign={false} />
           </div>
         </div>
 
         <div className="bg-slate-950/80 p-2 rounded border border-slate-800/80">
           <div className="text-[10px] text-slate-500">HIGH CONVICTION (≥75%)</div>
-          <div className="text-xs font-bold text-slate-200 flex items-center gap-1 mt-0.5">
+          <div className="text-xs font-bold text-slate-200 flex items-center gap-1 mt-0.5 tabular-nums">
             <TrendingUp className="w-3 h-3 text-emerald-400" />
-            {stats.highConvictionRate}%
+            <AnimatedPercent value={stats.highConvictionRate} precision={0} showSign={false} />
           </div>
         </div>
 
         <div className="bg-slate-950/80 p-2 rounded border border-slate-800/80">
           <div className="text-[10px] text-slate-500">DIRECTIONAL SKEW</div>
-          <div className="text-xs font-bold text-slate-200 flex items-center gap-1.5 mt-0.5">
+          <div className="text-xs font-bold text-slate-200 flex items-center gap-1.5 mt-0.5 tabular-nums">
             <span className="text-emerald-400 flex items-center">
               <ArrowUpRight className="w-3 h-3" />
-              {stats.longRatio}%
+              <AnimatedPercent value={stats.longRatio} precision={0} showSign={false} />
             </span>
             <span className="text-slate-600">/</span>
             <span className="text-rose-400 flex items-center">
               <ArrowDownRight className="w-3 h-3" />
-              {stats.shortRatio}%
+              <AnimatedPercent value={stats.shortRatio} precision={0} showSign={false} />
             </span>
           </div>
         </div>
 
         <div className="bg-slate-950/80 p-2 rounded border border-slate-800/80">
           <div className="text-[10px] text-slate-500">EXP ALPHA SPREAD</div>
-          <div className="text-xs font-bold text-emerald-400 mt-0.5">
-            +{stats.avgAlpha} bps
+          <div className="text-xs font-bold text-emerald-400 mt-0.5 tabular-nums">
+            <AnimatedNumber value={stats.avgAlpha} precision={1} showSign={true} suffix=" bps" />
           </div>
         </div>
 
         <div className="bg-slate-950/80 p-2 rounded border border-slate-800/80">
           <div className="text-[10px] text-slate-500">SAMPLE BUFFER</div>
-          <div className="text-xs font-bold text-slate-300 mt-0.5">
-            {signals.length} Signals
+          <div className="text-xs font-bold text-slate-300 mt-0.5 tabular-nums">
+            <AnimatedNumber value={signals.length} precision={0} suffix=" Signals" />
           </div>
         </div>
       </div>

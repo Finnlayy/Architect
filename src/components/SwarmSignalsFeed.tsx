@@ -1,6 +1,7 @@
 import React from 'react';
 import { Radio, ArrowUpRight, ArrowDownRight, CheckCircle, AlertOctagon, RefreshCcw, Zap } from 'lucide-react';
 import { RawSignal, JudgeVerdict, StrategyAgent } from '../types/trading';
+import { AnimatedNumber, AnimatedCurrency, AnimatedPercent } from './AnimatedNumber';
 
 interface SwarmSignalsFeedProps {
   signals: RawSignal[];
@@ -52,7 +53,7 @@ export const SwarmSignalsFeed: React.FC<SwarmSignalsFeedProps> = ({ signals, ver
             return (
               <div
                 key={sig.id}
-                className={`p-3 rounded-lg border text-xs font-mono transition-all ${
+                className={`p-3 rounded-lg border text-xs font-mono transition-all gpu-accelerate ${
                   verdict?.status === 'PASSED'
                     ? 'bg-slate-950/70 border-emerald-900/40 hover:border-emerald-700/60'
                     : verdict?.status === 'MODIFIED'
@@ -105,23 +106,29 @@ export const SwarmSignalsFeed: React.FC<SwarmSignalsFeedProps> = ({ signals, ver
                 </div>
 
                 {/* Metrics Row */}
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-2 pt-2 border-t border-slate-900 text-[11px] text-slate-400">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-2 pt-2 border-t border-slate-900 text-[11px] text-slate-400 tabular-nums">
                   <div>
                     <span className="text-slate-500">CONFIDENCE: </span>
-                    <strong className="text-cyan-400">{(sig.confidence * 100).toFixed(0)}%</strong>
+                    <strong className="text-cyan-400">
+                      <AnimatedPercent value={sig.confidence * 100} precision={0} />
+                    </strong>
                   </div>
                   <div>
                     <span className="text-slate-500">EXP ALPHA: </span>
-                    <strong className="text-emerald-400">+{sig.expectedAlphaBps} bps</strong>
+                    <strong className="text-emerald-400">
+                      +<AnimatedNumber value={sig.expectedAlphaBps} precision={0} /> bps
+                    </strong>
                   </div>
                   <div>
                     <span className="text-slate-500">REQUESTED: </span>
-                    <strong className="text-slate-200">${sig.suggestedSizeUsd.toLocaleString()}</strong>
+                    <strong className="text-slate-200">
+                      <AnimatedCurrency value={sig.suggestedSizeUsd} precision={0} />
+                    </strong>
                   </div>
                   <div>
                     <span className="text-slate-500">APPROVED: </span>
                     <strong className={verdict?.approvedSizeUsd ? 'text-white' : 'text-rose-400'}>
-                      ${verdict ? verdict.approvedSizeUsd.toLocaleString() : '-'}
+                      {verdict ? <AnimatedCurrency value={verdict.approvedSizeUsd} precision={0} /> : '-'}
                     </strong>
                   </div>
                 </div>
