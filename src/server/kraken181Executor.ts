@@ -275,7 +275,7 @@ export function executeKraken181Leaf(
     // ==========================================
     case 'paper/init': {
       const balIdx = args.indexOf('--balance');
-      const initAmt = balIdx !== -1 && args[balIdx + 1] ? parseFloat(args[balIdx + 1]) : 100000.0;
+      const initAmt = balIdx !== -1 && args[balIdx + 1] ? parseFloat(args[balIdx + 1]) : 1000.0;
       pLedger.current_value = initAmt;
       pLedger.initial_balance = initAmt;
       pLedger.cash = initAmt;
@@ -521,7 +521,7 @@ export function executeKraken181Leaf(
 
     case 'paper/reset': {
       const balIdx = args.indexOf('--balance');
-      const resetAmt = balIdx !== -1 && args[balIdx + 1] ? parseFloat(args[balIdx + 1]) : 100000.0;
+      const resetAmt = balIdx !== -1 && args[balIdx + 1] ? parseFloat(args[balIdx + 1]) : 1000.0;
       pLedger.current_value = resetAmt;
       pLedger.initial_balance = resetAmt;
       pLedger.cash = resetAmt;

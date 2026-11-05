@@ -26,6 +26,18 @@ import {
   getAgentStatus,
   AgentEngineContext,
 } from './src/server/omegaAgent.ts';
+import {
+  fetchCascadedMarketData,
+  runStrategyBacktest,
+  runScheduledScreenerCycle,
+  getScreenerScheduleStatus,
+  configureScreenerSchedule,
+  loadPersistentStrategyStore,
+  savePersistentStrategyStore,
+  MAX_CONCURRENT_TRADES_HARD_CAP,
+  DEFAULT_PAPER_INITIAL_CAPITAL,
+} from './src/server/terminalEngine.ts';
+import { TimeframeId, StrategyDefinition } from './src/types/terminal.ts';
 
 const app = express();
 const PORT = 3000;
@@ -1248,9 +1260,9 @@ const krakenCliState: KrakenCliState = {
   lastStartupInit: null,
   startupChecksPassed: false,
   paperLedger: {
-    current_value: 100000.0,
-    initial_balance: 100000.0,
-    cash: 100000.0,
+    current_value: DEFAULT_PAPER_INITIAL_CAPITAL,
+    initial_balance: DEFAULT_PAPER_INITIAL_CAPITAL,
+    cash: DEFAULT_PAPER_INITIAL_CAPITAL,
     unrealized_pnl: 0.0,
     realized_pnl: 0.0,
     total_pnl: 0.0,
@@ -2694,10 +2706,16 @@ app.post('/api/kraken/cli/paper-bridge/execute', async (req: Request, res: Respo
   const txid = `PAPER-${Date.now()}-${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
   const cliCommand = `kraken paper ${side.toLowerCase()} ${cleanPair} ${orderVol} --price ${execPrice}`;
 
-  // Apply to Paper Ledger Source of Truth
+  // Apply to Paper Ledger Source of Truth (Enforcing MAX 20 Concurrent Trades Cap)
   if (side.toLowerCase() === 'buy') {
-    krakenCliState.paperLedger.cash = Math.max(0, krakenCliState.paperLedger.cash - (cost + fee));
     const existingPos = krakenCliState.paperLedger.positions.find((p) => p.pair === cleanPair);
+    if (!existingPos && krakenCliState.paperLedger.positions.length >= MAX_CONCURRENT_TRADES_HARD_CAP) {
+      return res.status(403).json({
+        error: `Maximal ${MAX_CONCURRENT_TRADES_HARD_CAP} gleichzeitige Trades erreicht (${krakenCliState.paperLedger.positions.length}/${MAX_CONCURRENT_TRADES_HARD_CAP}). Bitte schließe zuerst eine offene Position.`,
+        code: 'MAX_20_TRADES_CAP_REACHED',
+      });
+    }
+    krakenCliState.paperLedger.cash = Math.max(0, krakenCliState.paperLedger.cash - (cost + fee));
     if (existingPos) {
       const totalVol = existingPos.vol + orderVol;
       const totalCost = existingPos.cost + cost;
@@ -3226,6 +3244,179 @@ app.post('/api/agent/clear', (req: Request, res: Response) => {
   res.json({ success: true, message: 'Agent traces cleared successfully' });
 });
 
+// ============================================================================
+// QUANT TERMINAL ENDPOINTS: 6-PROVIDER CASCADE, SCHEDULED SCREENER, BACKTESTER
+// ============================================================================
+
+// 1. Fetch OHLCV Candles via 6-Provider Cascade (Kraken -> CCXT -> Gainium -> Binance -> Alpaca -> Alpha Vantage)
+app.get('/api/market/ohlc', async (req: Request, res: Response) => {
+  try {
+    const symbol = String(req.query.symbol || 'BTC/USD');
+    const timeframe = String(req.query.timeframe || '15m') as TimeframeId;
+    const limit = Math.min(1000, Math.max(40, Number(req.query.limit) || 240));
+    const data = await fetchCascadedMarketData(symbol, timeframe, limit, getKrakenMarketPrice);
+    res.json({
+      success: true,
+      ...data,
+    });
+  } catch (err: any) {
+    res.status(404).json({
+      success: false,
+      error: err.message || 'Marktdaten konnten über die 6-Stufen-Kaskade nicht geladen werden.',
+    });
+  }
+});
+
+// 2. Execute Deterministic Bar-by-Bar Backtest & Inverse Shadow Engine ($1,000 Paper Basis, Max 20 Trades)
+app.post('/api/backtest/run', async (req: Request, res: Response) => {
+  try {
+    const strategy = req.body?.strategy as StrategyDefinition;
+    if (!strategy || typeof strategy !== 'object') {
+      return res.status(400).json({
+        success: false,
+        error: 'Ungültige Strategie-Konfiguration übergeben.',
+      });
+    }
+
+    const result = await runStrategyBacktest(strategy, getKrakenMarketPrice);
+
+    // Persist latest backtest result alongside strategy
+    const store = loadPersistentStrategyStore();
+    const existingIdx = store.strategies.findIndex((s) => s.id === strategy.id);
+    const updatedStrategies = [...store.strategies];
+    if (existingIdx >= 0) {
+      updatedStrategies[existingIdx] = { ...strategy, updatedAt: Date.now() };
+    } else {
+      updatedStrategies.unshift({ ...strategy, updatedAt: Date.now() });
+    }
+    savePersistentStrategyStore({
+      strategies: updatedStrategies,
+      lastResults: {
+        ...store.lastResults,
+        [strategy.id]: result,
+      },
+      activeStrategyId: strategy.id,
+    });
+
+    res.json({
+      success: true,
+      result,
+    });
+  } catch (err: any) {
+    res.status(400).json({
+      success: false,
+      error: err.message || 'Backtest-Berechnung fehlgeschlagen.',
+    });
+  }
+});
+
+// 3. Automated Scheduled Multi-Source Screener (All 6 Providers)
+app.get('/api/screener/schedule', (req: Request, res: Response) => {
+  const status = getScreenerScheduleStatus();
+  if (status.tickers.length === 0) {
+    res.json(runScheduledScreenerCycle(getKrakenMarketPrice));
+  } else {
+    res.json(status);
+  }
+});
+
+app.post('/api/screener/schedule', (req: Request, res: Response) => {
+  const { enabled, intervalSec } = req.body || {};
+  const status = configureScreenerSchedule({ enabled, intervalSec }, getKrakenMarketPrice);
+  res.json(status);
+});
+
+app.post('/api/screener/run-now', (req: Request, res: Response) => {
+  const status = runScheduledScreenerCycle(getKrakenMarketPrice);
+  res.json(status);
+});
+
+// 4. Persistent Strategy & Result Store Endpoints
+app.get('/api/strategies', (req: Request, res: Response) => {
+  const store = loadPersistentStrategyStore();
+  res.json(store);
+});
+
+app.post('/api/strategies', (req: Request, res: Response) => {
+  const { strategy, lastResult, activeStrategyId } = req.body || {};
+  const store = loadPersistentStrategyStore();
+  const updatedStrategies = [...store.strategies];
+
+  if (strategy && strategy.id) {
+    const idx = updatedStrategies.findIndex((s) => s.id === strategy.id);
+    if (idx >= 0) {
+      updatedStrategies[idx] = { ...strategy, updatedAt: Date.now() };
+    } else {
+      updatedStrategies.unshift({ ...strategy, updatedAt: Date.now() });
+    }
+  }
+
+  const updatedResults = { ...store.lastResults };
+  if (lastResult && strategy?.id) {
+    updatedResults[strategy.id] = lastResult;
+  }
+
+  const saved = savePersistentStrategyStore({
+    strategies: updatedStrategies,
+    lastResults: updatedResults,
+    activeStrategyId: activeStrategyId || strategy?.id || store.activeStrategyId,
+  });
+
+  res.json({
+    success: true,
+    store: saved,
+  });
+});
+
+app.delete('/api/strategies/:id', (req: Request, res: Response) => {
+  const id = req.params.id;
+  const store = loadPersistentStrategyStore();
+  const filtered = store.strategies.filter((s) => s.id !== id);
+  const updatedResults = { ...store.lastResults };
+  delete updatedResults[id];
+  const saved = savePersistentStrategyStore({
+    strategies: filtered,
+    lastResults: updatedResults,
+    activeStrategyId: filtered[0]?.id || '',
+  });
+  res.json({
+    success: true,
+    store: saved,
+  });
+});
+
+// 5. Emergency Kill Switch (Cancel All Open Orders & Flatten All Open Paper Positions)
+app.post('/api/terminal/emergency-flatten', async (req: Request, res: Response) => {
+  const closedCount = krakenCliState.paperLedger.positions.length;
+  const cancelledOrders = krakenCliState.paperLedger.openOrders.length;
+
+  let liquidatedValue = 0;
+  for (const pos of krakenCliState.paperLedger.positions) {
+    const price = getKrakenMarketPrice(pos.pair);
+    liquidatedValue += pos.vol * price;
+  }
+
+  krakenCliState.paperLedger.cash = Number((krakenCliState.paperLedger.cash + liquidatedValue).toFixed(2));
+  krakenCliState.paperLedger.current_value = krakenCliState.paperLedger.cash;
+  krakenCliState.paperLedger.unrealized_pnl = 0;
+  krakenCliState.paperLedger.positions = [];
+  krakenCliState.paperLedger.openOrders = [];
+
+  krakenCliJournal.unshift({
+    id: `JRN-KILL-${Date.now()}`,
+    timestamp: Date.now(),
+    text: `[EMERGENCY KILL SWITCH] Flattened ${closedCount} open positions and cancelled ${cancelledOrders} orders. Paper Account Cash: $${krakenCliState.paperLedger.cash.toFixed(2)} (0/${MAX_CONCURRENT_TRADES_HARD_CAP} active trades).`,
+  });
+
+  res.json({
+    success: true,
+    closedPositionsCount: closedCount,
+    cancelledOrdersCount: cancelledOrders,
+    paperLedger: krakenCliState.paperLedger,
+    message: `Notfall-Glattstellung ausgeführt: ${closedCount} Positionen geschlossen, ${cancelledOrders} Orders storniert. Aktive Trades: 0 / ${MAX_CONCURRENT_TRADES_HARD_CAP}.`,
+  });
+});
+
 async function startServer() {
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
@@ -3247,6 +3438,10 @@ async function startServer() {
     bootstrapKrakenTickerRest().catch((e) => console.warn('[Ticker Bootstrap]', e));
     bootstrapKrakenDepthRest();
     connectKrakenWebSocket();
+    // Initialize persistent strategy store & start automated scheduled multi-source screener across all 6 sources
+    loadPersistentStrategyStore();
+    runScheduledScreenerCycle(getKrakenMarketPrice);
+    configureScreenerSchedule({ enabled: true, intervalSec: 15 }, getKrakenMarketPrice);
     // Run Kraken CLI startup verification and balance routing for the orchestrator
     runKrakenStartupOrchestration().catch((err) => {
       console.warn('[Kraken CLI] Startup orchestration async warning:', err);

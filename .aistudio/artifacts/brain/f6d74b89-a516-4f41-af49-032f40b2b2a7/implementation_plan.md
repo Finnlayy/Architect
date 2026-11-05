@@ -1,80 +1,91 @@
-# OMEGA NIO — High-Density Quant & Execution Terminal (Finviz / Fischer / CCXT / El Toro DNA)
+# OMEGA NIO — High-Density Quant & Execution Terminal (Arcane Monitor Layout + Multi-Exchange Cascade)
 
-Kompletter Umbau der bestehenden OMEGA-NIO-Anwendung von einer erklärungs- und präsentationslastigen Architektur-Demo zu einem **kompromisslosen, produktiven Echtzeit-Trading-, Screening- und Backtesting-Terminal** für den direkten Arbeitseinsatz. Jedes sichtbare Element dient ausschließlich einer konkreten Benutzereingabe, einer echten Aktion, einem berechneten Ergebnis oder einem handlungsrelevanten Systemzustand.
+Kompletter Umbau der bestehenden OMEGA-NIO-Anwendung zu einer **produktiven, hochdichten Echtzeit-Trading-, Screening- und Backtesting-Arbeitsoberfläche** im Stil des Referenzfotos (*Arcane Monitor / Finviz / Fischer*) kombiniert mit den gezielten Live-Animationen des Referenzvideos (*Pipeline-Flow, rollende Zähler, `ENTER`/`EXIT`/`FILTERED`-Protokoll*).
 
 ## User Review & Critical Decisions
 
 > [!IMPORTANT]
-> **Bestätigte Ausrichtung aus deinem Feedback:**
-> Statt kosmetischer Modus-Tabs über der alten Präsentationsstruktur wird die Oberfläche radikal nach dem Vorbild von **Finviz** (kompaktes Multi-Symbol-Screening & Kennzahlen-Tabellen), **Fischer-Terminal** (100% Viewport-Ausnutzung, direkte Parameter-zu-Chart-Kopplung, $\cos\varphi$- & MFE/MAE-Präzision) sowie **CCXT / El Toro Terminal** (integriertes L2-Orderbuch, direktes Paper/Live-Execution-Blotter & Positionsverwaltung im selben Arbeitsbereich) neu aufgebaut.
-
-- **Entfernung jeglichen Präsentations-Ballasts**: Alle Marketing-Banner, Architektur-Erklärkarten, „Zero-Dummy“-Selbstbeschreibungen, die 4-Tasks-Toolbar und isolierte Vorstellungsseiten entfallen vollständig.
-- **Echte historische & Live-Marktdaten**: Der Backtest- und Chart-Motor bezieht reale historische OHLCV-Kerzendaten über die öffentliche Kraken REST API (`1m`, `5m`, `15m`, `1h`, `4h`, `1d`) kombiniert mit dem laufenden Kraken-WebSocket-Feed. Für Symbole ohne direkte Kraken-Historie greift ein deterministischer Generator mit unübersehbarem `SYNTHETIC DATA`-Statushinweis.
-- **Durchgängige Persistenz & Export**: Strategien, Parameter-Sets und Backtest-Läufe werden sowohl über dedizierte Server-Endpunkte als auch synchron im Browser (`LocalStorage`) gespeichert, überstehen jeden Page-Reload und lassen sich als CSV, JSON und Pine Script v6 (`.pine`) exportieren sowie aus JSON oder Google Drive importieren.
+> **Verbindliche System- & Architekturvorgaben aus deinem Feedback:**
+> 1. **Echte 6-Stufen-Marktdaten-Kaskade (Kein „Synthetic Fallback“-Müll)**:
+>    - Wenn ein Symbol oder Zeitrahmen bei **Kraken** nicht vorliegt, zieht der Backend-Data-Router die historischen OHLCV-Kerzen und Live-Kurse automatisch über die Kaskade:
+>      $$\text{1. Kraken} \longrightarrow \text{2. CCXT} \longrightarrow \text{3. Gainium} \longrightarrow \text{4. Binance} \longrightarrow \text{5. Alpaca} \longrightarrow \text{6. Alpha Vantage}$$
+> 2. **Automatische Scheduled Screener über alle 6 Quellen**:
+>    - Alle sechs Provider (*Kraken, CCXT, Gainium, Binance, Alpaca, Alpha Vantage*) speisen den **automatisch im Schedule laufenden Multi-Source-Screener**, der kontinuierlich Symbole, RVOL-Spikes, VWAP-Crosses, Spreads und 24h-Ausbrüche aktualisiert.
+> 3. **Paper-Account Startkapital exakt `1.000 $`**:
+>    - Das Startkapital (`initial_balance` / `initialCapital`) des Paper-Accounts und der Strategie-Konfiguration ist standardmäßig fest auf **`$1,000.00`** eingestellt.
+> 4. **Hartes Limit von maximal `20` gleichzeitigen Trades (`MAX_CONCURRENT_TRADES = 20`)**:
+>    - Im gesamten System und im Sizer/M8-Gate dürfen **maximal 20 Trades gleichzeitig** offen sein (`Active Trades: X / 20`). Bei 20 offenen Trades werden weitere Entry-Signale strikt mit `FILTERED: MAX 20 TRADES REACHED` abgewiesen, bis wieder ein Slot frei wird.
+> 5. **Shadow-Engine (Inverse Gegenstrategie) im Hintergrund**:
+>    - Die Shadow-Engine läuft als inverse Spiegelbild-Strategie automatisch mit, ohne die Hauptoberfläche mit theoretischem Ballast zu überfrachten.
 
 ---
 
 ## 1. Overview & Core Concept
 
-- **Was das System leistet**: Eine integrierte Single-Screen-Arbeitsoberfläche, in der Trader ohne Seitenwechsel Märkte nach Volumen-/Volatilitätsanomalien filtern (Finviz-Screener), quantitative Strategien parametrisieren, deterministische Backtests über reale historische Kerzendaten berechnen, jede einzelne Trade-Entscheidung im Chart und in der Round-Trip-Tabelle prüfen, den generierten Pine-Script-v6-Code anpassen und Strategien direkt gegen das angebundene Kraken-Paper/Live-Orderbuch ausführen können.
-- **Zielgruppe & Nutzungskontext**: Aktive systematische Trader und Quant-Analysten, die hohe Informationsdichte, sofortige kausale Rückmeldung bei Parameteränderungen und verlässliche Datenquellen-Transparenz benötigen.
-- **Kernmehrwert**: Null Klicks durch Erklärseiten – 100 % des Bildschirms arbeiten als synchronisiertes Analyse-, Backtest- und Ausführungswerkzeug.
+- **Was das System leistet**: Ein mehrspaltiges Echtzeit-Trading- und Backtesting-Terminal ohne jeglichen Präsentations-Ballast. Automatische Scheduled Screener scannen fortlaufend Märkte über *Kraken, CCXT, Gainium, Binance, Alpaca und Alpha Vantage*. Der Nutzer wählt per Klick ein Symbol, konfiguriert seine Strategie (Startkapital `1.000 $`, Max. `20` parallele Trades), berechnet echte OHLCV-Backtests oder lässt die Pipeline live gegen den `1.000 $` Paper-Account arbeiten.
+- **Kernmehrwert**: Echte Multi-Exchange-Marktdatenabdeckung ohne künstliche Fallback-Badges, kombiniert mit der hohen Informationsdichte des *Arcane Monitor*-Rasters und dem flüssigen Pipeline-Feedback des *Grok Bot Terminals*.
 
 ---
 
 ## 2. User Experience & Visual Design
 
-### Key User Flows (End-to-End im selben Terminal)
+### Visuelle Architektur (Foto-Layout + Video-Dynamik)
 
-1. **Markt-Screening & Symbolwechsel (Finviz / CCXT Stil)**:
-   - Oben links oder im kompakten Screener-Panel wählt der Nutzer ein Handelspaar (z. B. `BTC/USD`, `ETH/USD`, `SOL/USD`, `HYPE/USD`, `PEPE/USD`, `ZEC/USD`, `AVAX/USD`, `XRP/USD`) und den Zeitrahmen (`1m`, `5m`, `15m`, `1h`, `4h`, `1d`).
-   - Der Screener schaltet verzögerungsfrei zwischen **Universe Watchlist** (Kurs, 24h-Änderung, Spread in bps, RVOL, Regime-Phase) und **Anomaly Stream** (Echtzeit-Ausbrüche bei Volumen- oder Spread-Spikes) um. Ein Klick auf eine Zeile lädt sofort Kerzendaten, Orderbuch und Strategie-Berechnung für dieses Symbol.
-2. **Strategie auswählen, erstellen, importieren & parametrisieren (Fischer-Terminal DNA)**:
-   - Auswahl aus praxisfertigen Strategie-Vorlagen (*SniperFusion v3.1 Long/Short*, *MTF CISD Structure Break*, *1m Microstructure Flip-Sensor*, *Sigma Bollinger/Z-Score Reversion*, *ATR Volatility Breakout*) oder Anlage einer neuen Strategie bzw. Import per JSON / Google Drive.
-   - Direkt sichtbare Kernparameter: Handelsrichtung (`LONG & SHORT`, `LONG ONLY`, `SHORT ONLY`), Datenzeitraum (Kerzenanzahl bzw. Start-/Enddatum), Startkapital (`Initial Capital`), Risiko pro Trade (`Risk %`), Hebel (`Leverage`), Kommission (`Fee %`), Slippage (`bps`), Stop-Loss (`ATR Multiplikator`) sowie **Exit-Modus** (`TP Ladder`, `Auto TP [MFE-Quantil]`, `Fractal TP`, `Trailing from Top`).
-   - Aufklappbares Akkordeon **„Erweitert“** für Spezialparameter (Indikator-Perioden, Z-Score-Schwellen, $\cos\varphi$ Phasen-Filter, Profit-Lock Giveback R, M8-Risiko-Schranken).
-3. **Backtest-Ausführung mit Job-Steuerung & Validierung**:
-   - Strikte Eingabevalidierung vor dem Start (z. B. Abfangen negativer Kapital-/Gebührenwerte oder ungültiger Zeiträume mit präziser Korrekturmeldung).
-   - Klick auf **„Backtest starten“** sperrt Doppelstarts, zeigt den realen Berechnungsstatus im Header und bietet einen **„Abbrechen“**-Button (`AbortController`) für laufende Abfragen.
-4. **Visuelle & Tabellarische Auswertung**:
-   - **Haupt-Chart**: Interaktiver Kerzen-/Preis-Chart mit eingezeichneten Entry-/Exit-Markern (`BUY`, `SELL`, `TP`, `SL`, `TRAIL`, `EARLY_OPP`), aktiven Stop-/Target-Linien sowie umschaltbarer **Equity- und Drawdown-Kurve**.
-   - **Kompakter $\cos\varphi$- & Shadow-Monitor**: Einzeilige Telemetrie-Leiste direkt am Chart für Wirkleistung vs. Rauschen ($\cos\varphi$), virtuelles Long/Short-Spiegelbild (MFE/MAE) und adaptives Auto-TP-Quantil.
-   - **Unteres Auswertungs-Dock (Kompakte Reiter)**:
-     - *Trade-Liste*: Sortier- und filterbare Tabelle aller Round-Trips inkl. Ein-/Ausstiegszeit, Preis, Positionsgröße, Gebühren, Net PnL ($/%), MFE, MAE und Exit-Grund. Klick auf einen Trade fokussiert den Zeitpunkt im Chart.
-     - *Performance & Risiko*: Net Profit, Profit Factor, Win Rate, Sharpe Ratio, Sortino, Max Drawdown, Expectancy, Durchschnittlicher Gewinn/Verlust und Exit-Verteilung.
-     - *Live / Paper Blotter & Bots (CCXT / El Toro)*: Aktive Positionen, offene Orders, direktes Order-Ticket (Market/Limit Buy/Sell über die Kraken Paper Bridge), Positions-Glattstellung und laufende DCA-Worker-Bots.
-     - *Pine Script v6*: Vollständiger, editierbarer Pine-Script-v6-Strategiecode passend zu den gewählten Parametern mit One-Click-Copy und `.pine`-Dateiexport.
-     - *Diagnose & System-Logs*: Bei Bedarf einblendbare Rohdaten, Kraken-WebSocket-Latenz, M8-Gate-Prüfprotokolle und API-Statusmeldungen.
-5. **Speichern, Wiederherstellen & Exportieren**:
-   - Speichern der Strategie inklusive Parameter und letztem Backtest-Ergebnis; automatische Wiederherstellung beim erneuten Öffnen der Anwendung; direkter Dateiexport als **CSV** (Trade-Liste), **JSON** (kompletter Strategie- & Ergebnis-Snapshot) und **Pine Script (`.pine`)**.
+- **Oberflächen & Farbkodierung**:
+  - **Tiefschwarzes Terminal-Grid**: Hintergrund `#07090E`, Panel-Flächen `#0C1017`, aktive Kopfzeilen `#111722`, gestochen scharfe 1px-Trennlinien `#1B2230`.
+  - **Semantische Signalfarben**:
+    - `#089981` / `#10B981` (Smaragdgrün): Long / `EXIT` im Gewinn / Bid-Absorption / Aktive Quelle
+    - `#F23645` (Karmesinrot): Short / `EXIT` im Verlust / Slot-Limit (`20/20`) / Ask-Dominanz / Emergency Kill Switch
+    - `#00E5FF` (Cyan): `ENTER`-Signale / Aktive Pipeline-Stufe / Fokus-Symbol
+    - `#FF9800` / `#EC4899` (Bernstein / Pink): `FILTERED` (z. B. durch `20/20 Trade Cap`, Spread-Limit oder Risiko-Gate)
+- **Typografie & Zahlen-Disziplin**:
+  - Kompakte Sans-Serif (`Plus Jakarta Sans` / `DM Sans`) für Panel-Titel und Steuerung (`10px`–`12px`, `whitespace-nowrap`).
+  - Striktes `JetBrains Mono` mit `font-variant-numeric: tabular-nums` für alle Kurse, Volumina, RVOL, Prozentwerte, Zeitstempel und PnL-Spalten.
+- **Gezielte Animationen (wie im Video)**:
+  - **5-Stufen-Pipeline (`SCANNER → RISK CHECK → SIZER → EXECUTOR → LOGGER`)**: Animierter Signalfluss mit Anzeige der aktuellen Positions-Auslastung (`Slots: X / 20`) und Prozent-Allokation vom `1.000 $` Konto.
+  - **Fließende Zähler**: Rollende `tabular-nums`-Zähler für Paper-Equity (startend bei `$1,000.00`), Realized/Unrealized PnL sowie Wins/Losses.
+  - **Absorptions- & Auslastungs-Balken (*Beam of Absorption*)**: Flüssig animierte horizontale Balken für Orderbuch-Tiefe und aktive Trade-Slots (`0–20`).
 
-### Visual Identity & Theme
+### Durchgängiger Arbeitsablauf im Multi-Panel-Workspace
 
-- **Aesthetic Direction**: Kompromissloses institutionelles Quant- & Execution-Terminal (Finviz / Fischer / CCXT Vorbild) – flache 1px-Rahmenarchitektur, null dekorative Schatten-Karten, maximale Datenlesbarkeit.
-- **Color Palette & Mood**:
-  - Primärer Hintergrund (`#0B0E14`), strukturelle Panel-Oberflächen (`#12161F`), präzise 1px-Trennlinien (`#1E2430`).
-  - Semantische Signalfarben (niemals ohne klaren Text-/Richtungsindikator):
-    - `#089981` (Smaragdgrün): Long / Positiver PnL / Wirkleistung ($\cos\varphi \to 1,0$) / Live-Verbindung
-    - `#F23645` (Karmesinrot): Short / Negativer PnL / Stop-Loss / Hard-Limit-Warnung / Kill-Switch
-    - `#00E5FF` (Cyan): Shadow-Queue / MFE-Quantil-Kurve / Aktiver Fokus
-    - `#FF9800` (Bernstein): Synthetische Fallback-Daten / Chop-Sperre ($\cos\varphi \to 0$) / Reconnect-Zustand
-- **Typography & Hierarchy**:
-  - Struktur & UI-Labels: `Plus Jakarta Sans` / `DM Sans` in kompakter 11px–13px Skalierung, klare Zeilenführung (`whitespace-nowrap` auf allen Controls).
-  - Preise, Metriken, Zeitstempel, PnL & Tabellen: Strikt `JetBrains Mono` mit `font-variant-numeric: tabular-nums`, damit bei Echtzeit-Ticks kein einziges Layout-Element wackelt.
+1. **Top Command & Telemetry Bar**:
+   - Links: Markenkennung + Schnell-Umschalter für Symbol & Zeitrahmen (`1m`, `5m`, `15m`, `1h`, `4h`, `1d`) + aktive Datenquelle aus der Kaskade (`KRAKEN` · `CCXT` · `GAINIUM` · `BINANCE` · `ALPACA` · `ALPHA VANTAGE`) mit Zeitstempel.
+   - Mitte: **Paper-Account Equity Zähler** (Basis: **`$1,000.00`**), Win/Loss-Verhältnis, **Trade-Slot-Wächter (`X / 20 Active Trades`)** sowie Status laufender Jobs inkl. **„Abbrechen“**-Button.
+   - Rechts: Hard-Limit-Wächter (Daily Loss, Max Drawdown), Modus-Umschalter (`PAPER [$1,000]` / `LIVE`) und **EMERGENCY KILL SWITCH (Flatten All 20)**.
+2. **Linke Zone — Automatischer Multi-Source Scheduled Screener & Strategie-Konfigurator**:
+   - **Scheduled Multi-Exchange Screener (wie links oben im Foto)**:
+     - Läuft automatisch im hinterlegten Intervall-Schedule über alle 6 Quellen (*Kraken, CCXT, Gainium, Binance, Alpaca, Alpha Vantage*).
+     - Filterbar nach Quelle (`ALL`, `KRAKEN`, `CCXT`, `GAINIUM`, `BINANCE`, `ALPACA`, `ALPHAVANTAGE`) oder Signal-Typ (*Universe*, *High RVOL*, *Breakout*).
+     - Kompakte Spalten: `SYM`, `SRC`, `PRICE`, `RVOL`, `CHG %`, `SPREAD`. Klick auf jede Zeile lädt sofort Kerzen und Orderbuch.
+   - **Strategie-Steuerung & Parameter**:
+     - Vorlagen-Auswahl (*SniperFusion v3.1*, *MTF CISD Breakout*, *1m Flip-Sensor*, *Sigma Z-Score Reversion*, *ATR Trend*), Neu-Anlage, Speichern und JSON-/Drive-Import.
+     - Direkt sichtbare Kernparameter: Richtung (`LONG & SHORT`, `LONG`, `SHORT`), Zeitraum (`200`–`1000` Bars), **Startkapital (`$1,000.00`)**, **Max. gleichzeitige Trades (`20`)**, Risiko pro Trade (`%`), Hebel, Gebühren (`%`), Slippage (`bps`), Stop-Loss (`ATR Multiplikator`) und **Exit-Modus** (`TP Ladder`, `Auto TP`, `Fractal TP`, `Trailing from Top`).
+     - Aufklappbares Akkordeon **„Erweitert“** für Indikator-Perioden, Z-Score-Schwellen, Profit-Lock Giveback R und Shadow-Engine-Gegenlauf.
+     - Primärer Button **„Backtest starten / Berechnen“** (inkl. Validierung, Doppelstart-Sperre und Abbruch-Button).
+3. **Zentrale Zone — Asset-Dossier, Animierte Pipeline, Haupt-Chart & Ergebnis-Ledger**:
+   - **Asset- & Strategie-Kopf (wie Mitte oben im Foto)**: Aktives Symbol, Datenquelle in der Kaskade, 24h-Range-Balken, `Price`, `Change`, `RVol`, `VWAP`, `ATR` und aktueller Status der inversen Shadow-Position.
+   - **Animierter Pipeline-Strip (wie im Video)**: `SCANNER → CHECK (≤20 Trades) → SIZER ($1k Basis) → EXECUTOR → LOGGER` mit Live-Indikator für durchgelassene und gefilterte Signale.
+   - **Interaktiver Haupt-Chart**: Echte OHLCV-Kerzen mit leuchtenden `ENTER`/`EXIT`/`SL`/`TP`-Markern, aktiven Stop-/Trailing-Linien sowie umschaltbarer **Equity-Kurve (Start bei `$1,000.00`)** und **Drawdown-Kurve**.
+   - **Unteres Multi-Tab-Dock**:
+     - *Trade-Liste & Execution Log*: Alle Round-Trips und Live-Events (`ENTER` / `EXIT` / `FILTERED`, Zeit, Quelle, Preis, Größe, Gebühren, Net PnL, Return %, MFE, MAE, exakter `reason`-Text).
+     - *Performance & Risiko-Metriken*: Net Profit (auf `1.000 $` Basis), Profit Factor, Win Rate, Sharpe, Sortino, Max Drawdown, Expectancy, Peak Concurrent Trades (`max 20`).
+     - *Aktive Trades (`X / 20`) & Execution Blotter*: Übersicht aller aktuell offenen Positionen (maximal 20), manuelles Order-Ticket, Einzel-Close oder Flatten-All.
+     - *Pine Script v6 Editor*: Editierbarer Pine-Script-v6-Code mit One-Click-Copy und `.pine`-Export.
+     - *Diagnose & System-Logs*: Status der 6 Datenquellen-Adapter, Scheduled-Screener-Läufe und API-Logs.
+4. **Rechte Zone — Echtzeit-Chronik (*Chronicle of Events*) & *Beam of Absorption* (Orderbuch)**:
+   - **Chronicle of Events (wie rechts oben im Foto)**: Laufender Stream der automatischen Scheduled-Screener-Treffer (`VWAP cross`, `High of Day`, `RVOL Spike`, `New Entry`, `Max 20 Cap Block`) über alle 6 Quellen.
+   - **Orderbuch & *Beam of Absorption* (wie rechts unten im Foto)**: L2 Bid/Ask-Tiefe mit horizontalen Absorptions-Balken für Kaufdruck vs. Verkaufsdruck.
 
 ---
 
 ## 3. Key Product Decisions & Trade-Offs
 
-- **Decision 1: Echte Multi-Pane-Terminal-Architektur statt Tab-Seiten-Sammlung**
-  - *Gewählter Ansatz*: Ein durchgängiger 3-Spalten-/Multi-Pane-Workspace (Links: Screener & Strategie-Konfigurator; Mitte oben: Chart + Equity/Drawdown + $\cos\varphi$/Shadow-Strip; Mitte unten: Trades / Metriken / Execution Blotter / Pine Script; Rechts kompakt: L2-Orderbuch & Tape).
-  - *Warum*: Ein Trader muss beim Ändern eines ATR-Multiplikators oder beim Klick auf ein Symbol im Screener sofort die Auswirkung im Chart und in den Kennzahlen sehen, ohne zwischen isolierten Unterseiten hin- und herzuspringen.
-- **Decision 2: Reale Kraken-OHLCV-Historie mit gekennzeichnetem deterministischem Fallback**
-  - *Gewählter Ansatz*: Der Backend-Endpunkt `/api/backtest/run` und `/api/market/ohlc` ruft echte historische Kerzen von Kraken (`https://api.kraken.com/0/public/OHLC`) ab. Wird ein Symbol gewählt, das auf Kraken Spot nicht existiert (oder ist die externe API nicht erreichbar), erzeugt die Engine deterministische historische Kerzen, verankert am letzten bekannten Marktpreis, und markiert das Ergebnis unübersehbar als `SYNTHETIC / SIMULATED`.
-  - *Warum*: Garantiert 100 % Ehrlichkeit über die Datenherkunft und ermöglicht gleichzeitig unterbrechungsfreies Testen aller Symbole und Fehlerfälle.
-- **Decision 3: Duale Persistenz (Server + LocalStorage) für Strategien & Ergebnisse**
-  - *Gewählter Ansatz*: Alle gespeicherten Strategien, Parameter und Backtest-Runs werden über `/api/strategies` auf dem Server persistiert und zusätzlich im Browser-`LocalStorage` gespiegelt.
-  - *Warum*: Sofortige Wiederherstellung nach jedem Seiten-Reload sowie Schutz vor Datenverlust.
+- **Decision 1: Deterministische 6-Stufen-Provider-Kaskade (`Kraken → CCXT → Gainium → Binance → Alpaca → Alpha Vantage`)**
+  - *Gewählter Ansatz*: Ein zentraler Backend-Market-Data-Service prüft der Reihe nach Kraken, CCXT-Endpunkte, Gainium, Binance (`data-api.binance.vision` / `api.binance.com`), Alpaca und Alpha Vantage. Sobald eine Quelle valide OHLCV-Kerzen bzw. Ticker liefert, wird diese Quelle mit ihrem echten Provider-Tag (`KRAKEN`, `CCXT`, `GAINIUM`, `BINANCE`, `ALPACA`, `ALPHAVANTAGE`) ausgeliefert. Falls für einen spezifischen Anbieter ein API-Key in `.env` benötigt wird und noch fehlt, meldet die Diagnose exakt den fehlenden Key und schaltet verzögerungsfrei auf das nächste Glied der Kaskade weiter.
+- **Decision 2: Automatischer Scheduled Screener im Backend & Frontend**
+  - *Gewählter Ansatz*: Ein Hintergrund-Scheduler scannt periodisch das Multi-Exchange-Universum aus allen 6 Quellen, berechnet RVOL, 24h-Change, Spread und VWAP-Abstand und speist die Ergebnisse automatisch in die linke Screener-Tabelle sowie in die rechte Event-Chronik ein.
+- **Decision 3: Striktes `1.000 $` Paper-Konto & `20 Trades` Hard-Cap**
+  - *Gewählter Ansatz*: Sowohl der Paper-Ledger im Backend als auch der Backtester und Positions-Sizer starten exakt mit `$1,000.00` und blockieren jeden 21. gleichzeitigen Trade hart im Risiko-Gate.
 
 ---
 
@@ -83,44 +94,38 @@ Kompletter Umbau der bestehenden OMEGA-NIO-Anwendung von einer erklärungs- und 
 ### Architecture & Component Diagram
 
 ```
-┌──────────────────────────────────────────────────────────────────────────────────────────┐
-│ TOP COMMAND & STATUS BAR                                                                 │
-│ [OMEGA NIO] · [Symbol/TF Quick-Bar] · [Data Source & Job Status + Cancel] · [KILL SWITCH]│
-├────────────────────────┬─────────────────────────────────────────────┬───────────────────┤
-│ LEFT PANE (320px)      │ CENTER TOP PANE (Flex 1)                    │ RIGHT PANE (260px)│
-│                        │                                             │                   │
-│ 1. Finviz Screener     │ 1. Interactive Price / Trade / Equity Chart │ 1. Kraken L2 Book │
-│    - Universe Table    │    - OHLCV Candles + Buy/Sell/SL/TP Markers │    - Bid/Ask Depth│
-│    - Anomaly Stream    │    - Toggle: Price | Equity | Drawdown      │    - Spread (bps) │
-│                        │                                             │                   │
-│ 2. Strategy Builder    │ 2. Compact cos(φ) & Shadow Queue Strip      │ 2. Live Trade Tape│
-│    - Template / Import │    - Phase Efficiency · Virtual Long/Short  │                   │
-│    - Capital, Risk, Fee│                                             │ 3. Quick Execution│
-│    - ATR SL & Exit Mode├─────────────────────────────────────────────┤    - Paper / Live │
-│    - [+] Advanced      │ CENTER BOTTOM DOCK (Resizable / Tabbed)     │    - M8 Gate Check│
-│                        │ [Trades (Round-Trips)] [Performance/Risiko] │                   │
-│ 3. Action Controls     │ [Positions & Bots] [Pine Script v6] [Logs]  │                   │
-│    [Run Backtest]      │                                             │                   │
-│    [Save] [Export]     │ [Export CSV] [Export JSON] [Export .pine]   │                   │
-└────────────────────────┴─────────────────────────────────────────────┴───────────────────┘
-                                         │
-                                         ▼
-┌──────────────────────────────────────────────────────────────────────────────────────────┐
-│ EXPRESS BACKEND & EXECUTION ENGINE                                                       │
-│ - /api/market/ohlc & /api/backtest/run (Real Kraken OHLCV + Deterministic Sim Engine)    │
-│ - /api/strategies (GET / POST / DELETE persistent strategy & backtest store)             │
-│ - /api/kraken/* (Live WebSocket v2 Book/Ticker + 181-Leaf CLI Paper/Live Execution SoT)  │
-└──────────────────────────────────────────────────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────────────────────────────────────────────────────┐
+│ TOP COMMAND BAR: [OMEGA NIO] · [Symbol/TF] · [Active Provider] · [Equity: $1,000.00] · [Trades: X/20] │
+├───────────────────────────┬────────────────────────────────────────────────┬──────────────────────┤
+│ LEFT COLUMN (310px)       │ CENTER COLUMN (Flex 1)                         │ RIGHT COLUMN (290px) │
+│                           │                                                │                      │
+│ 1. Scheduled Multi-Source │ 1. Active Asset Dossier & Animated Pipeline    │ 1. Chronicle Stream  │
+│    Screener (Auto-Cron)   │    - Provider Tag · 24h Range · Shadow Status  │    - Live Scheduled  │
+│    [Kraken|CCXT|Gainium|  │    - [SCAN]──►[CHECK ≤20]──►[SIZE]──►[EXEC]    │      Screener Hits   │
+│     Binance|Alpaca|AlphaV]│                                                │      across 6 Sources│
+│                           │ 2. Interactive Price / Equity ($1k) / DD Chart │                      │
+│ 2. Strategy Configurator  │    - OHLCV Candles + Glowing ENTER/EXIT Dots   │ 2. Beam of Absorption│
+│    - Capital: $1,000.00   │    - Active SL / TP / Trailing Lines           │    & L2 Orderbook    │
+│    - Max Open Trades: 20  ├────────────────────────────────────────────────┤    - Bid/Ask Depth   │
+│    - Risk%, Fee%, ATR SL  │ 3. Dense Evaluation & Execution Ledger         │    - Imbalance Bars  │
+│    - [+] Advanced & Shadow│    [Trade Log (ENTER/EXIT/FILTERED)]           │    - Quick Order     │
+│                           │    [Performance & Risk] [Open Trades (X / 20)] │      Ticket ($1k Cap)│
+│ 3. Primary Actions        │    [Pine Script v6 Editor] [Provider Logs]     │                      │
+│    [Run Backtest / Cancel]│                                                │                      │
+│    [Save] [CSV/JSON/.pine]│                                                │                      │
+└───────────────────────────┴────────────────────────────────────────────────┴──────────────────────┘
+                                             │
+                                             ▼
+┌───────────────────────────────────────────────────────────────────────────────────────────────────┐
+│ EXPRESS BACKEND: 6-PROVIDER CASCADE, SCHEDULED SCREENER & $1,000 PAPER LEDGER (MAX 20 TRADES)     │
+│ - /api/market/ohlc & /api/backtest/run (Cascade: Kraken → CCXT → Gainium → Binance → Alpaca → AV) │
+│ - /api/screener/schedule (Auto-running cron across all 6 sources + manual trigger & status)       │
+│ - /api/strategies & /api/kraken/cli/paper/* ($1,000 initial balance, 20 concurrent trades guard)  │
+└───────────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
-
-### Data Model & State
-
-- **`StrategyDefinition`**: Eindeutige ID, Name, Beschreibung, Kategorie, Zeitrahmen, Symbol, Richtung (`LONG` | `SHORT` | `BOTH`), Kerzenanzahl/Zeitraum, Kapital (`initialCapital`), Risiko pro Trade (`riskPerTradePct`), Hebel (`leverage`), Gebühren (`feePct`), Slippage (`slippageBps`), Stop-Loss-ATR-Multiplikator (`slAtrMult`), Take-Profit-R (`tpRMultiple`), Exit-Modus (`TP_LADDER` | `AUTO_TP_MFE` | `FRACTAL_TP` | `TRAILING_STOP`), sowie erweiterte Parameter (`fastPeriod`, `slowPeriod`, `zScoreThreshold`, `cosPhiThreshold`, `profitLockGivebackR`, `mfeWindow`).
-- **`BacktestResult`**: Verknüpfte `strategyId`, Symbol, Zeitrahmen, Datenquelle (`KRAKEN_LIVE_OHLC` | `SYNTHETIC_FALLBACK`), Zeitstempel, Kerzen-Array (`OHLCVCandle[]`), vollständige `BacktestTrade[]`-Liste (inkl. Entry/Exit-Preis, Größe, Gebühren, Slippage, Net PnL, Return %, MFE %, MAE %, Exit-Grund), `EquityPoint[]`-Kurve (Equity & Drawdown %), `ShadowMetrics` ($\cos\varphi$, Shadow Long/Short PnL, berechnetes MFE-Quantil), zusammenfassende `PerformanceMetrics` sowie der generierte `pineScriptCode`.
 
 ### Interactive Component & State Mapping
 
-- **Symbol- & Zeitrahmenwechsel**: Löst unmittelbar das Nachladen der passenden OHLCV-Kerzen und Orderbuchdaten aus; falls eine Strategie aktiv ist, wird der Backtest automatisch oder per Knopfdruck mit den neuen Marktdaten neu berechnet.
-- **Kausale Parameter-Kopplung**: Jede Änderung an Kapital, Risiko %, Gebühren, Slippage, ATR-Stop, Exit-Modus oder erweiterten Schwellenwerten fließt direkt in die Backtest-Berechnung und die Pine-Script-v6-Codegenerierung ein.
-- **Validierung, Laufzeit-Sperre & Abbruch**: Ungültige Eingaben (z. B. Kapital $\le 0$, Risiko $> 100\%$, Gebühren $< 0$) zeigen sofortige Inline-Fehlermeldungen und blockieren den Start. Während ein Job läuft, ist der Start-Button gesperrt und ein aktiver `Cancel Job`-Button bricht den laufenden Request über `AbortController` sauber ab.
-- **Notfall-Glattstellung (Emergency Kill Switch)**: Ein zweistufig gesicherter Button im Header storniert über `/api/kraken/cli/paper/cancel-all` alle offenen Orders und schließt alle offenen Paper-Positionen sofort.
+- **Multi-Source-Kaskade bei Symbol-/Zeitrahmenwechsel**: Wechselt der Nutzer auf z. B. `BTC/USD`, `PEPE/USDT`, `ZEC/USDT`, `SOL/USD`, `NVDA` oder `EUR/USD`, durchläuft das Backend automatisch `Kraken → CCXT → Gainium → Binance → Alpaca → Alpha Vantage`, lädt die echten Kerzen und zeigt den liefernden Provider transparent an.
+- **Automatischer Scheduled Screener**: Läuft im einstellbaren Takt (z. B. 15s / 30s / 60s), aktualisiert alle Symbole der 6 Quellen und erzeugt Echtzeit-Einträge in der *Chronicle of Events*.
+- **`$1,000` Startkapital & `20 Trades` Limit**: Jede Positionsgrößenberechnung basiert standardmäßig auf `$1,000.00` Equity; versucht ein Backtest oder Bot einen 21. Trade gleichzeitig zu öffnen, greift sofort die Sperre `MAX_CONCURRENT_TRADES (20/20)` und protokolliert den Vorgang als `FILTERED`.

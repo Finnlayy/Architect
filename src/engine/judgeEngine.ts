@@ -22,10 +22,10 @@ export function adjudicateSignal(
   let scaleFactor = 1.0;
   let failedGate: string | undefined;
 
-  // Strict Authoritative NAV: prioritize kraken balance navUsd over any internal or simulated state
+  // Strict Authoritative NAV: prioritize kraken balance navUsd ($1,000 Paper Account basis)
   const effectiveNavUsd = (typeof authoritativeNavUsd === 'number' && authoritativeNavUsd > 0)
     ? authoritativeNavUsd
-    : (portfolio.navUsd || 100000);
+    : (portfolio.navUsd || 1000);
 
   // ----------------------------------------------------
   // M1: Sanity & Latency Monotonicity Gate
@@ -48,29 +48,34 @@ export function adjudicateSignal(
   }
 
   // ----------------------------------------------------
-  // M2: Portfolio Gross & Net Exposure Barrier
+  // M2: Portfolio Gross Exposure, Concentration & Max 20 Concurrent Trades Barrier
   // ----------------------------------------------------
   const currentGrossUsd = portfolio.positions.reduce((acc, p) => acc + p.allocatedUsd, 0);
   const currentAssetPos = portfolio.positions.find((p) => p.symbol === signal.symbol);
   const currentAssetUsd = currentAssetPos ? currentAssetPos.allocatedUsd : 0;
+  const openTradesCount = portfolio.positions.length;
+  const withinMax20Trades = currentAssetPos ? true : openTradesCount < 20;
 
   const projectedGrossUsd = currentGrossUsd + approvedSizeUsd;
   const projectedGrossLeverage = projectedGrossUsd / Math.max(effectiveNavUsd, 1);
   const projectedAssetConcentrationPct = ((currentAssetUsd + approvedSizeUsd) / Math.max(effectiveNavUsd, 1)) * 100;
 
   const m2Passed =
+    withinMax20Trades &&
     projectedGrossLeverage <= config.maxGrossLeverage &&
     projectedAssetConcentrationPct <= config.maxAssetConcentrationPct;
 
   gateResults.push({
     gateId: 'M2',
-    name: 'Gross Exposure & Concentration Barrier',
+    name: 'Max 20 Trades & Exposure Barrier',
     passed: m2Passed,
-    metricValue: Math.round(projectedGrossLeverage * 100) / 100,
-    threshold: config.maxGrossLeverage,
-    reason: m2Passed
-      ? `Gross lev ${projectedGrossLeverage.toFixed(2)}x <= ${config.maxGrossLeverage}x, Conc ${projectedAssetConcentrationPct.toFixed(1)}% <= ${config.maxAssetConcentrationPct}%`
-      : `Limit exceeded: Gross Lev ${projectedGrossLeverage.toFixed(2)}x (max ${config.maxGrossLeverage}x) or Conc ${projectedAssetConcentrationPct.toFixed(1)}% (max ${config.maxAssetConcentrationPct}%)`,
+    metricValue: openTradesCount,
+    threshold: 20,
+    reason: !withinMax20Trades
+      ? `Hard Cap Reached: ${openTradesCount}/20 concurrent trades active`
+      : m2Passed
+      ? `Slots ${openTradesCount}/20, Gross lev ${projectedGrossLeverage.toFixed(2)}x <= ${config.maxGrossLeverage}x`
+      : `Limit exceeded: Gross Lev ${projectedGrossLeverage.toFixed(2)}x or Conc ${projectedAssetConcentrationPct.toFixed(1)}%`,
   });
 
   if (!m2Passed) {

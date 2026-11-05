@@ -271,22 +271,26 @@ export function executeVerdict(
       }
     }
   } else {
-    // Add new position
-    newPositions.push({
-      symbol: verdict.symbol,
-      direction: verdict.direction === 'LONG' ? 'LONG' : 'SHORT',
-      quantity,
-      entryPrice: filledPrice,
-      currentPrice: filledPrice,
-      unrealizedPnl: 0,
-      unrealizedPnlPct: 0,
-      allocatedUsd: verdict.approvedSizeUsd,
-      openedAt: Date.now(),
-      strategyId: verdict.strategyId,
-      stopLossPrice: Math.round(stopLossPrice * 100) / 100,
-      takeProfitPrice: Math.round(takeProfitPrice * 100) / 100,
-    });
-  }
+      // Max 20 concurrent trades hard cap
+      if (newPositions.length >= 20) {
+        return { updatedPortfolio: portfolio };
+      }
+      // Add new position
+      newPositions.push({
+        symbol: verdict.symbol,
+        direction: verdict.direction === 'LONG' ? 'LONG' : 'SHORT',
+        quantity,
+        entryPrice: filledPrice,
+        currentPrice: filledPrice,
+        unrealizedPnl: 0,
+        unrealizedPnlPct: 0,
+        allocatedUsd: verdict.approvedSizeUsd,
+        openedAt: Date.now(),
+        strategyId: verdict.strategyId,
+        stopLossPrice: Math.round(stopLossPrice * 100) / 100,
+        takeProfitPrice: Math.round(takeProfitPrice * 100) / 100,
+      });
+    }
 
   // Update cash and NAV
   const totalTradeFees = feeUsd + exitFeeUsd;
@@ -361,7 +365,7 @@ export function recalculatePortfolio(
   };
 }
 
-export function createInitialPortfolio(initialCapital: number = 100000): PortfolioState {
+export function createInitialPortfolio(initialCapital: number = 1000): PortfolioState {
   return {
     cashUsd: initialCapital,
     navUsd: initialCapital,

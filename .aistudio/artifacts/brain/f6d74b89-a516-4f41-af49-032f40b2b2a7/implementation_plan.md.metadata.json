@@ -1,6 +1,6 @@
 {
-  "summary": "Umsetzungsplan für den Umbau von OMEGA NIO zu einem kompromisslosen, produktiven Quant- & Trading-Terminal nach dem Vorbild von Finviz, Fischer, CCXT und El Toro – ohne Präsentationsballast, mit echtem OHLCV-Backtester, Screener, Orderbook/Execution-Blotter, Persistenz und Export.",
-  "updatedAt": "2026-11-04T19:15:13.327807543Z",
+  "summary": "Überarbeiteter Umsetzungsplan: Ersetzt jeglichen synthetischen Fallback durch die echte 6-Stufen-Marktdaten-Kaskade (Kraken → CCXT → Gainium → Binance → Alpaca → Alpha Vantage), bindet alle 6 Quellen in die automatisch laufenden Scheduled Screener ein, setzt das Paper-Account-Startkapital fest auf 1.000 $ und verankert das harte Limit von maximal 20 gleichzeitig laufenden Trades.",
+  "updatedAt": "2026-11-05T00:56:30.410437926Z",
   "requestFeedback": true,
   "userFacing": true
 }

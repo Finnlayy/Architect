@@ -601,7 +601,7 @@ export async function executeKrakenPaperSell(pair: string, volume: number, price
   });
 }
 
-export async function executeKrakenPaperReset(balance: number = 100000): Promise<any> {
+export async function executeKrakenPaperReset(balance: number = 1000): Promise<any> {
   return executeKrakenCliCommand({
     command: 'paper',
     args: ['reset', '--balance', String(balance)],

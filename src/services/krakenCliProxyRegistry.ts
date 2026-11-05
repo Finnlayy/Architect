@@ -536,7 +536,7 @@ export async function paperHistory(): Promise<any[]> {
 /**
  * Reset CLI Paper ledger via `kraken paper reset [--balance <amount>]`
  */
-export async function paperReset(balance: number = 100000): Promise<any> {
+export async function paperReset(balance: number = 1000): Promise<any> {
   const result = await executeViaProxyRegistry('paper', ['reset', '--balance', String(balance)], {}, 'KRAKEN_CLI_BRIDGE');
   return result.data;
 }
