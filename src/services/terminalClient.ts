@@ -6,6 +6,7 @@ import {
   StrategyDefinition,
   BacktestResult,
   ScreenerScheduleStatus,
+  CmcIntelligencePayload,
 } from '../types/terminal';
 
 const LOCAL_STORAGE_KEY = 'omega_nio_terminal_store_v5';
@@ -174,6 +175,49 @@ export const INITIAL_CLIENT_STRATEGIES: StrategyDefinition[] = [
   },
 ];
 
+export interface SystemMemoryTelemetry {
+  timestamp: number;
+  uptimeSec: number;
+  rssMb: number;
+  heapUsedMb: number;
+  heapTotalMb: number;
+  heapLimitMb: number;
+  externalMb: number;
+  arrayBuffersMb: number;
+  wsClientsCount: number;
+  swarmWsClientsCount: number;
+  sseClientsCount: number;
+  krakenWsStatus: string;
+  autoSweepsCount: number;
+  lastSweepAt: number | null;
+  status: 'HEALTHY' | 'ELEVATED' | 'CRITICAL';
+  history: Array<{
+    timestamp: number;
+    timeFormatted: string;
+    rssMb: number;
+    heapUsedMb: number;
+  }>;
+}
+
+export async function fetchSystemMemoryStatus(): Promise<SystemMemoryTelemetry> {
+  const res = await fetch('/api/system/memory', { signal: AbortSignal.timeout(4000) });
+  if (!res.ok) {
+    throw new Error('Memory status fetch failed');
+  }
+  return res.json();
+}
+
+export async function triggerSystemGcSweep(): Promise<SystemMemoryTelemetry> {
+  const res = await fetch('/api/system/gc-sweep', {
+    method: 'POST',
+    signal: AbortSignal.timeout(5000),
+  });
+  if (!res.ok) {
+    throw new Error('Memory GC sweep failed');
+  }
+  return res.json();
+}
+
 export function loadLocalStore(): PersistentTerminalStore | null {
   try {
     const raw = localStorage.getItem(LOCAL_STORAGE_KEY);
@@ -190,7 +234,31 @@ export function loadLocalStore(): PersistentTerminalStore | null {
 
 export function saveLocalStore(store: PersistentTerminalStore): void {
   try {
-    localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(store));
+    const cappedStrategies = (store.strategies || []).slice(0, 20);
+    const keepIds = new Set(cappedStrategies.slice(0, 5).map((s) => s.id));
+    if (store.activeStrategyId) keepIds.add(store.activeStrategyId);
+
+    const prunedResults: Record<string, BacktestResult> = {};
+    for (const [id, res] of Object.entries(store.lastResults || {})) {
+      if (keepIds.has(id) && res) {
+        prunedResults[id] = {
+          ...res,
+          candles: Array.isArray(res.candles) ? res.candles.slice(-200) : [],
+          equityCurve: Array.isArray(res.equityCurve) ? res.equityCurve.slice(-200) : [],
+          trades: Array.isArray(res.trades) ? res.trades.slice(-80) : [],
+          pipelineEvents: Array.isArray(res.pipelineEvents) ? res.pipelineEvents.slice(0, 30) : [],
+        };
+      }
+    }
+
+    localStorage.setItem(
+      LOCAL_STORAGE_KEY,
+      JSON.stringify({
+        strategies: cappedStrategies,
+        lastResults: prunedResults,
+        activeStrategyId: store.activeStrategyId,
+      })
+    );
   } catch {
     // ignore quota error
   }
@@ -394,6 +462,22 @@ export async function triggerEmergencyFlatten(): Promise<any> {
   const res = await fetch('/api/terminal/emergency-flatten', { method: 'POST' });
   if (!res.ok) {
     throw new Error('Emergency Flatten fehlgeschlagen.');
+  }
+  return res.json();
+}
+
+export async function fetchCmcIntelligence(force = false): Promise<CmcIntelligencePayload> {
+  const res = await fetch(`/api/cmc/intelligence${force ? '?force=1' : ''}`);
+  if (!res.ok) {
+    throw new Error('CoinMarketCap Intelligence konnte nicht geladen werden.');
+  }
+  return res.json();
+}
+
+export async function refreshCmcIntelligence(): Promise<CmcIntelligencePayload> {
+  const res = await fetch('/api/cmc/refresh', { method: 'POST' });
+  if (!res.ok) {
+    throw new Error('CoinMarketCap Refresh fehlgeschlagen.');
   }
   return res.json();
 }
