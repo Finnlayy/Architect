@@ -9,6 +9,17 @@ import { AlertCircle, Eye, EyeOff } from 'lucide-react';
 
 export type ChartViewMode = 'PRICE' | 'EQUITY' | 'DRAWDOWN';
 
+export interface ChartOpenPaperPosition {
+  pair: string;
+  side: 'LONG' | 'SHORT';
+  entryPrice: number;
+  stopLossPrice: number;
+  takeProfitPrice: number;
+  unrealizedPnl: number;
+  qty: number;
+  isBreakEven?: boolean;
+}
+
 interface TerminalWorkspaceChartProps {
   symbol: string;
   timeframe: string;
@@ -21,6 +32,7 @@ interface TerminalWorkspaceChartProps {
   onSelectTrade: (tradeId: string | null) => void;
   fastEmaPeriod: number;
   slowEmaPeriod: number;
+  openPaperPositions?: ChartOpenPaperPosition[];
 }
 
 function calcEMA(values: number[], period: number): number[] {
@@ -33,7 +45,7 @@ function calcEMA(values: number[], period: number): number[] {
   return ema;
 }
 
-export const TerminalWorkspaceChart: React.FC<TerminalWorkspaceChartProps> = ({
+export const TerminalWorkspaceChart: React.FC<TerminalWorkspaceChartProps> = React.memo(({
   symbol,
   timeframe,
   provider,
@@ -45,12 +57,14 @@ export const TerminalWorkspaceChart: React.FC<TerminalWorkspaceChartProps> = ({
   onSelectTrade,
   fastEmaPeriod,
   slowEmaPeriod,
+  openPaperPositions = [],
 }) => {
   const [viewMode, setViewMode] = useState<ChartViewMode>('PRICE');
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
   const [showEma, setShowEma] = useState<boolean>(true);
   const [showVwap, setShowVwap] = useState<boolean>(true);
   const [showTradeMarkers, setShowTradeMarkers] = useState<boolean>(true);
+  const [showPaperPositionLines, setShowPaperPositionLines] = useState<boolean>(true);
   const [showShadowEquity, setShowShadowEquity] = useState<boolean>(true);
 
   const visibleCandles = useMemo(() => {
@@ -102,9 +116,17 @@ export const TerminalWorkspaceChart: React.FC<TerminalWorkspaceChartProps> = ({
       min = Math.min(min, selectedTrade.stopLossPrice, selectedTrade.takeProfitPrice);
       max = Math.max(max, selectedTrade.stopLossPrice, selectedTrade.takeProfitPrice);
     }
+    if (showPaperPositionLines && openPaperPositions.length > 0) {
+      for (const pos of openPaperPositions) {
+        if (pos.entryPrice > 0) {
+          min = Math.min(min, pos.entryPrice, pos.stopLossPrice, pos.takeProfitPrice);
+          max = Math.max(max, pos.entryPrice, pos.stopLossPrice, pos.takeProfitPrice);
+        }
+      }
+    }
     const range = Math.max(max - min, min * 0.005, 0.000001);
     return { min: min - range * 0.06, max: max + range * 0.06 };
-  }, [visibleCandles, selectedTrade]);
+  }, [visibleCandles, selectedTrade, showPaperPositionLines, openPaperPositions]);
 
   // Equity Mode Bounds
   const equityBounds = useMemo(() => {
@@ -316,7 +338,7 @@ export const TerminalWorkspaceChart: React.FC<TerminalWorkspaceChartProps> = ({
               <button
                 type="button"
                 onClick={() => setShowTradeMarkers((v) => !v)}
-                className={`px-1.5 py-0.5 text-[9px] font-mono border flex items-center gap-1 ${
+                className={`px-1.5 py-0.5 text-[9px] font-mono border flex items-center gap-1 whitespace-nowrap shrink-0 ${
                   showTradeMarkers
                     ? 'border-[#089981]/40 text-[#089981] bg-[#089981]/10'
                     : 'border-[#1B2230] text-[#566173]'
@@ -324,6 +346,18 @@ export const TerminalWorkspaceChart: React.FC<TerminalWorkspaceChartProps> = ({
               >
                 {showTradeMarkers ? <Eye className="w-2.5 h-2.5" /> : <EyeOff className="w-2.5 h-2.5" />}
                 TRADES
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowPaperPositionLines((v) => !v)}
+                title="Horizontale Entry-, Stop-Loss- und Take-Profit-Linien für offene Paper-Positionen ein-/ausblenden"
+                className={`px-1.5 py-0.5 text-[9px] font-mono border flex items-center gap-1 whitespace-nowrap shrink-0 ${
+                  showPaperPositionLines
+                    ? 'border-[#00E5FF]/50 text-[#00E5FF] bg-[#00E5FF]/15'
+                    : 'border-[#1B2230] text-[#566173]'
+                }`}
+              >
+                PAPER-POS ({openPaperPositions.length})
               </button>
             </>
           )}
@@ -407,7 +441,7 @@ export const TerminalWorkspaceChart: React.FC<TerminalWorkspaceChartProps> = ({
                     fontSize="9"
                     fontFamily="JetBrains Mono, monospace"
                   >
-                    SL {formatPrice(selectedTrade.stopLossPrice)}
+                    BT SL {formatPrice(selectedTrade.stopLossPrice)}
                   </text>
                   <line
                     x1={PAD_LEFT}
@@ -425,10 +459,86 @@ export const TerminalWorkspaceChart: React.FC<TerminalWorkspaceChartProps> = ({
                     fontSize="9"
                     fontFamily="JetBrains Mono, monospace"
                   >
-                    TP {formatPrice(selectedTrade.takeProfitPrice)}
+                    BT TP {formatPrice(selectedTrade.takeProfitPrice)}
                   </text>
                 </g>
               )}
+
+              {/* Open Paper Position Entry, Auto-SL & Auto-TP Horizontal Lines */}
+              {showPaperPositionLines &&
+                openPaperPositions.map((pos, pIdx) => {
+                  const yEntry = yForPrice(pos.entryPrice);
+                  const ySl = yForPrice(pos.stopLossPrice);
+                  const yTp = yForPrice(pos.takeProfitPrice);
+                  const pnlSign = pos.unrealizedPnl >= 0 ? '+' : '';
+                  return (
+                    <g key={`paper-pos-${pos.pair}-${pIdx}`}>
+                      {/* Paper Entry Line */}
+                      <line
+                        x1={PAD_LEFT}
+                        y1={yEntry}
+                        x2={W - PAD_RIGHT}
+                        y2={yEntry}
+                        stroke="#00E5FF"
+                        strokeWidth="1.3"
+                        strokeDasharray="6 2"
+                      />
+                      <text
+                        x={PAD_LEFT + 6}
+                        y={yEntry - 4}
+                        fill="#00E5FF"
+                        fontSize="9"
+                        fontWeight="bold"
+                        fontFamily="JetBrains Mono, monospace"
+                      >
+                        PAPER {pos.side} ENTRY {formatPrice(pos.entryPrice)} ({pnlSign}$
+                        {pos.unrealizedPnl.toFixed(2)})
+                      </text>
+
+                      {/* Paper Stop-Loss Line */}
+                      <line
+                        x1={PAD_LEFT}
+                        y1={ySl}
+                        x2={W - PAD_RIGHT}
+                        y2={ySl}
+                        stroke={pos.isBreakEven ? '#00E5FF' : '#F59E0B'}
+                        strokeWidth="1.2"
+                        strokeDasharray="3 3"
+                      />
+                      <text
+                        x={W - PAD_RIGHT - 155}
+                        y={ySl - 4}
+                        fill={pos.isBreakEven ? '#00E5FF' : '#F59E0B'}
+                        fontSize="9"
+                        fontWeight="bold"
+                        fontFamily="JetBrains Mono, monospace"
+                      >
+                        {pos.isBreakEven ? 'AUTO-SL (BE)' : 'AUTO-SL'} {formatPrice(pos.stopLossPrice)}
+                      </text>
+
+                      {/* Paper Take-Profit Line */}
+                      <line
+                        x1={PAD_LEFT}
+                        y1={yTp}
+                        x2={W - PAD_RIGHT}
+                        y2={yTp}
+                        stroke="#089981"
+                        strokeWidth="1.2"
+                        strokeDasharray="3 3"
+                      />
+                      <text
+                        x={W - PAD_RIGHT - 155}
+                        y={yTp - 4}
+                        fill="#089981"
+                        fontSize="9"
+                        fontWeight="bold"
+                        fontFamily="JetBrains Mono, monospace"
+                      >
+                        AUTO-TP {formatPrice(pos.takeProfitPrice)}
+                      </text>
+                    </g>
+                  );
+                })}
 
               {/* VWAP Line */}
               {showVwap && (
@@ -683,4 +793,4 @@ export const TerminalWorkspaceChart: React.FC<TerminalWorkspaceChartProps> = ({
       </div>
     </div>
   );
-};
+});

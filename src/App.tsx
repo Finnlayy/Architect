@@ -11,6 +11,7 @@ import {
   ScreenerScheduleStatus,
   OHLCVCandle,
   ProviderAttemptTrace,
+  CmcIntelligencePayload,
 } from './types/terminal';
 import {
   INITIAL_CLIENT_STRATEGIES,
@@ -24,9 +25,14 @@ import {
   updateScreenerSchedule,
   triggerScreenerRunNow,
   triggerEmergencyFlatten,
+  fetchCmcIntelligence,
+  refreshCmcIntelligence,
   exportTradesToCsv,
   exportStrategyAndResultToJson,
   exportPineScriptFile,
+  fetchSystemMemoryStatus,
+  triggerSystemGcSweep,
+  SystemMemoryTelemetry,
 } from './services/terminalClient';
 import {
   fetchPaperBridgeStatus,
@@ -36,9 +42,18 @@ import {
 } from './services/krakenCliProxyRegistry';
 import { useKrakenStream } from './hooks/useKrakenStream';
 import { TerminalPipelineStrip } from './components/TerminalPipelineStrip';
-import { TerminalWorkspaceChart } from './components/TerminalWorkspaceChart';
+import { TerminalWorkspaceChart, ChartOpenPaperPosition } from './components/TerminalWorkspaceChart';
 import { TerminalDiagnosticsDrawer } from './components/TerminalDiagnosticsDrawer';
+import { TerminalCmcIntelligenceTab } from './components/TerminalCmcIntelligenceTab';
+import { EquityDrawdownHeatmap } from './components/EquityDrawdownHeatmap';
 import { DriveBlueprintModal } from './components/DriveBlueprintModal';
+import { ArcadeAudioControl } from './components/ArcadeAudioControl';
+import {
+  TerminalNotificationBell,
+  LiveEventToastStack,
+  TerminalNotificationItem,
+} from './components/TerminalNotificationCenter';
+import { arcadeSoundEngine, SoundEventType } from './services/arcadeSoundEngine';
 import { initAuth, googleSignIn, logout, getAccessToken } from './services/firebase';
 import { searchDriveFiles, fetchFileContent } from './services/googleDrive';
 import { User } from 'firebase/auth';
@@ -68,11 +83,15 @@ import {
   ArrowUpRight,
   ArrowDownRight,
   RotateCcw,
+  Globe,
+  Flame,
 } from 'lucide-react';
 
 const PROVIDER_BADGE_STYLES: Record<DataProviderId, string> = {
   KRAKEN: 'text-[#00E5FF] border-[#00E5FF]/40 bg-[#00E5FF]/10',
   CCXT: 'text-[#10B981] border-[#10B981]/40 bg-[#10B981]/10',
+  MEXC: 'text-[#00C087] border-[#00C087]/50 bg-[#00C087]/15',
+  CMC: 'text-[#60A5FA] border-[#3861FB]/50 bg-[#3861FB]/15',
   GAINIUM: 'text-[#A855F7] border-[#A855F7]/40 bg-[#A855F7]/10',
   BINANCE: 'text-[#F59E0B] border-[#F59E0B]/40 bg-[#F59E0B]/10',
   ALPACA: 'text-[#3B82F6] border-[#3B82F6]/40 bg-[#3B82F6]/10',
@@ -81,7 +100,7 @@ const PROVIDER_BADGE_STYLES: Record<DataProviderId, string> = {
 
 const TIMEFRAMES: TimeframeId[] = ['1m', '5m', '15m', '1h', '4h', '1d'];
 
-type BottomDockTab = 'TRADES' | 'METRICS' | 'EXECUTION' | 'PINE';
+type BottomDockTab = 'TRADES' | 'CMC' | 'METRICS' | 'EXECUTION' | 'PINE';
 type LeftPaneMode = 'CONFIG' | 'SCREENER';
 
 export function App() {
@@ -123,11 +142,13 @@ export function App() {
   const [statusNotice, setStatusNotice] = useState<string | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
 
-  // 4. Screener & Chronicle State (6 Providers)
+  // 4. Screener, CoinMarketCap Intelligence & Chronicle State (7 Providers)
   const [screenerStatus, setScreenerStatus] = useState<ScreenerScheduleStatus | null>(null);
   const [screenerFilter, setScreenerFilter] = useState<'ALL' | 'ANOMALIES' | DataProviderId>('ALL');
   const [screenerSearch, setScreenerSearch] = useState<string>('');
   const [isScreenerRefreshing, setIsScreenerRefreshing] = useState<boolean>(false);
+  const [cmcData, setCmcData] = useState<CmcIntelligencePayload | null>(null);
+  const [isCmcLoading, setIsCmcLoading] = useState<boolean>(false);
 
   // 5. Kraken Paper Bridge ($1,000.00 Account) & Live WebSocket Stream
   const [paperBridge, setPaperBridge] = useState<PaperBridgeStatus | null>(null);
@@ -150,16 +171,104 @@ export function App() {
   );
   const [pineCopied, setPineCopied] = useState<boolean>(false);
   const [isDiagnosticsOpen, setIsDiagnosticsOpen] = useState<boolean>(false);
+  const [memoryTelemetry, setMemoryTelemetry] = useState<SystemMemoryTelemetry | null>(null);
   const [isDriveModalOpen, setIsDriveModalOpen] = useState<boolean>(false);
   const [driveUser, setDriveUser] = useState<User | null>(null);
   const [driveFiles, setDriveFiles] = useState<DriveBlueprintItem[]>([]);
   const [isDriveLoading, setIsDriveLoading] = useState<boolean>(false);
   const [driveError, setDriveError] = useState<string | null>(null);
   const [systemLogs, setSystemLogs] = useState<string[]>([
-    `[${new Date().toLocaleTimeString('de-DE')}] OMEGA NIO Terminal initialisiert · Paper Account Basis: $1,000.00 · Max Concurrent Trades Cap: 20`,
+    `[${new Date().toLocaleTimeString('de-DE')}] OMEGA NIO Terminal initialisiert · Paper Account Basis: $1,000.00 · Max Concurrent Trades Cap: 20 · 24/7 RAM Watchdog aktiv`,
   ]);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const knownAnomaliesRef = useRef<Set<string>>(new Set());
+  const initialScreenerSeededRef = useRef<boolean>(false);
+  const isPollingRef = useRef<boolean>(false);
+  const pollCycleCountRef = useRef<number>(0);
+  const lastRealizedPnlRef = useRef<number | null>(null);
+  const lastExecutionTxidRef = useRef<string | null>(null);
+  const autoClosingPairsRef = useRef<Set<string>>(new Set());
+  const toastTimersRef = useRef<Map<string, number>>(new Map());
+
+  // 7. Live Event Toasts (6s Auto-Dismiss) & Header Notification Bell History
+  const [notifications, setNotifications] = useState<TerminalNotificationItem[]>([]);
+  const [activeToasts, setActiveToasts] = useState<TerminalNotificationItem[]>([]);
+
+  // 8. Auto-SL/TP Risk Brackets for Open Paper Positions
+  const [paperBrackets, setPaperBrackets] = useState<
+    Record<
+      string,
+      {
+        entryPrice: number;
+        stopLossPrice: number;
+        takeProfitPrice: number;
+        isBreakEven: boolean;
+        side: 'LONG' | 'SHORT';
+      }
+    >
+  >(() => {
+    if (typeof window === 'undefined') return {};
+    try {
+      const raw = window.localStorage.getItem('omega_paper_brackets_v1');
+      return raw ? JSON.parse(raw) : {};
+    } catch {
+      return {};
+    }
+  });
+
+  const dismissToast = useCallback((id: string) => {
+    const timer = toastTimersRef.current.get(id);
+    if (timer) {
+      window.clearTimeout(timer);
+      toastTimersRef.current.delete(id);
+    }
+    setActiveToasts((prev) => prev.filter((t) => t.id !== id));
+  }, []);
+
+  const pushNotification = useCallback(
+    (category: SoundEventType, title: string, detail: string, symbol?: string) => {
+      const now = Date.now();
+      const id = `notif_${now}_${Math.random().toString(36).slice(2, 6)}`;
+      const item: TerminalNotificationItem = {
+        id,
+        timestamp: now,
+        timeFormatted: new Date(now).toLocaleTimeString('de-DE', { hour12: false }),
+        category,
+        title,
+        detail,
+        symbol,
+        read: false,
+      };
+      setNotifications((prev) => [item, ...prev.slice(0, 29)]);
+      setActiveToasts((prev) => [item, ...prev.slice(0, 2)]);
+
+      const timer = window.setTimeout(() => {
+        toastTimersRef.current.delete(id);
+        setActiveToasts((prev) => prev.filter((t) => t.id !== id));
+      }, 6000);
+      toastTimersRef.current.set(id, timer);
+    },
+    []
+  );
+
+  useEffect(() => {
+    const timersMap = toastTimersRef.current;
+    return () => {
+      timersMap.forEach((t) => window.clearTimeout(t));
+      timersMap.clear();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const entries = Object.entries(paperBrackets).slice(-25);
+      window.localStorage.setItem('omega_paper_brackets_v1', JSON.stringify(Object.fromEntries(entries)));
+    } catch {
+      // ignore storage errors
+    }
+  }, [paperBrackets]);
 
   const appendLog = useCallback((msg: string) => {
     const ts = new Date().toLocaleTimeString('de-DE');
@@ -185,8 +294,10 @@ export function App() {
       setDriveUser(user);
       const files = await searchDriveFiles(accessToken, 'OMEGA');
       setDriveFiles(files);
+      arcadeSoundEngine.play('UI_FEEDBACK');
       appendLog(`Google Drive verbunden (${user.email}): ${files.length} Blueprints gefunden.`);
     } catch (err: any) {
+      arcadeSoundEngine.play('WARNING_MEME');
       setDriveError(err.message || 'Google Drive Anmeldung fehlgeschlagen.');
     } finally {
       setIsDriveLoading(false);
@@ -237,10 +348,12 @@ export function App() {
       setStrategies((prev) => [newStrat, ...prev.filter((s) => s.id !== newStrat.id)]);
       setActiveStrategy(newStrat);
       setIsDriveModalOpen(false);
+      arcadeSoundEngine.play('SUCCESS_FANFARE');
       setStatusNotice(`Google Drive Blueprint "${file.name}" als Strategie geladen.`);
       appendLog(`Google Drive Blueprint "${file.name}" importiert.`);
       await handleRunBacktest(newStrat);
     } catch (err: any) {
+      arcadeSoundEngine.play('WARNING_MEME');
       setDriveError(err.message || 'Datei konnte nicht geladen werden.');
     } finally {
       setIsDriveLoading(false);
@@ -261,23 +374,33 @@ export function App() {
     });
   }, [activeStrategy.id, strategies, backtestResult]);
 
-  // Initial Load: Fetch strategies, scheduled screener, paper bridge ($1,000), and run initial backtest
+  // Initial Load: Fetch strategies, scheduled screener, CMC intelligence, paper bridge ($1,000), memory watchdog, and run initial backtest
   useEffect(() => {
     let mounted = true;
     async function bootstrap() {
       try {
-        const [storeData, screenerData, bridgeData] = await Promise.all([
+        const [storeData, screenerData, bridgeData, cmcPayload, memData] = await Promise.all([
           fetchStrategyStore().catch(() => null),
           fetchScreenerSchedule().catch(() => null),
           fetchPaperBridgeStatus().catch(() => null),
+          fetchCmcIntelligence().catch(() => null),
+          fetchSystemMemoryStatus().catch(() => null),
         ]);
         if (!mounted) return;
 
         if (bridgeData) {
           setPaperBridge(bridgeData);
+          lastRealizedPnlRef.current = bridgeData.paperLedger?.realized_pnl ?? null;
+          lastExecutionTxidRef.current = bridgeData.lastExecution?.txid ?? null;
         }
         if (screenerData) {
           setScreenerStatus(screenerData);
+        }
+        if (cmcPayload) {
+          setCmcData(cmcPayload);
+        }
+        if (memData) {
+          setMemoryTelemetry(memData);
         }
         if (storeData && storeData.strategies?.length) {
           setStrategies(storeData.strategies);
@@ -295,26 +418,145 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Periodic polling of the Automated Scheduled Screener & Paper Account Ledger
+  // Periodic polling of the Automated Scheduled Screener, CoinMarketCap, Paper Account Ledger & 24/7 Memory Watchdog
+  // Guarded with an in-flight lock (isPollingRef) so overlapping requests never accumulate over 24/7 operation.
   useEffect(() => {
     const timer = setInterval(async () => {
+      if (isPollingRef.current) return;
+      isPollingRef.current = true;
+      pollCycleCountRef.current += 1;
+      const shouldPollCmc = pollCycleCountRef.current % 3 === 0;
+
       try {
-        const [screenerData, bridgeData] = await Promise.all([
+        const [screenerData, bridgeData, memData, cmcPayload] = await Promise.all([
           fetchScreenerSchedule().catch(() => null),
           fetchPaperBridgeStatus().catch(() => null),
+          fetchSystemMemoryStatus().catch(() => null),
+          shouldPollCmc ? fetchCmcIntelligence().catch(() => null) : Promise.resolve(null),
         ]);
         if (screenerData) {
           setScreenerStatus(screenerData);
+          const currentAnomalies = (screenerData.tickers || []).filter(
+            (t) =>
+              (t.signalTag && t.signalTag !== 'NORMAL') ||
+              t.rvol >= 2.0 ||
+              Math.abs(t.zScore) >= 2.0
+          );
+          if (!initialScreenerSeededRef.current) {
+            currentAnomalies.forEach((t) =>
+              knownAnomaliesRef.current.add(`${t.symbol}:${t.signalTag || 'ANOMALY'}`)
+            );
+            initialScreenerSeededRef.current = true;
+          } else {
+            let hasNewAnomaly = false;
+            let firstNewAnomalyTicker: ScreenerTickerRow | null = null;
+            const nextSet = new Set<string>();
+            for (const t of currentAnomalies) {
+              const key = `${t.symbol}:${t.signalTag || 'ANOMALY'}`;
+              nextSet.add(key);
+              if (!knownAnomaliesRef.current.has(key)) {
+                hasNewAnomaly = true;
+                if (!firstNewAnomalyTicker) firstNewAnomalyTicker = t;
+              }
+            }
+            knownAnomaliesRef.current = nextSet;
+            if (hasNewAnomaly && firstNewAnomalyTicker) {
+              arcadeSoundEngine.play('SCREENER_ALERT', { isBackground: true });
+              pushNotification(
+                'SCREENER_ALERT',
+                `Screener Anomalie: ${firstNewAnomalyTicker.symbol} (${firstNewAnomalyTicker.signalTag})`,
+                `RVOL ${firstNewAnomalyTicker.rvol.toFixed(2)}x · Z-Score ${firstNewAnomalyTicker.zScore.toFixed(2)} · Quelle: ${firstNewAnomalyTicker.provider}`,
+                firstNewAnomalyTicker.symbol
+              );
+            }
+          }
         }
         if (bridgeData) {
           setPaperBridge(bridgeData);
+          if (bridgeData.paperLedger && lastRealizedPnlRef.current !== null) {
+            const currentRealized = bridgeData.paperLedger.realized_pnl;
+            const diff = currentRealized - lastRealizedPnlRef.current;
+            if (diff > 0.01) {
+              arcadeSoundEngine.play('TAKE_PROFIT', { isBackground: true });
+              pushNotification(
+                'TAKE_PROFIT',
+                `Take-Profit Realisiert (+$${diff.toFixed(2)})`,
+                `Realisierter Gewinn im Paper-Ledger verbucht · Gesamt Realized PnL: $${currentRealized.toFixed(2)}`,
+                bridgeData.lastExecution?.symbol
+              );
+            } else if (diff < -0.01) {
+              arcadeSoundEngine.play('STOP_LOSS', { isBackground: true });
+              pushNotification(
+                'STOP_LOSS',
+                `Stop-Loss / Verlust Realisiert (-$${Math.abs(diff).toFixed(2)})`,
+                `Risikobegrenzung im Paper-Ledger verbucht · Gesamt Realized PnL: $${currentRealized.toFixed(2)}`,
+                bridgeData.lastExecution?.symbol
+              );
+            }
+          }
+          if (
+            bridgeData.lastExecution?.txid &&
+            lastExecutionTxidRef.current !== null &&
+            bridgeData.lastExecution.txid !== lastExecutionTxidRef.current
+          ) {
+            arcadeSoundEngine.play('ORDER_FILL', { isBackground: true });
+            pushNotification(
+              'ORDER_FILL',
+              `Order-Fill: ${bridgeData.lastExecution.side.toUpperCase()} ${bridgeData.lastExecution.symbol}`,
+              `Ausgeführt @ $${ bridgeData.lastExecution.price.toFixed(2) } (${bridgeData.lastExecution.txid.slice(-8)})`,
+              bridgeData.lastExecution.symbol
+            );
+          }
+          lastRealizedPnlRef.current = bridgeData.paperLedger?.realized_pnl ?? null;
+          lastExecutionTxidRef.current = bridgeData.lastExecution?.txid ?? null;
+        }
+        if (memData) {
+          setMemoryTelemetry(memData);
+        }
+        if (cmcPayload) {
+          setCmcData(cmcPayload);
         }
       } catch {
         // Silent background refresh
+      } finally {
+        isPollingRef.current = false;
       }
-    }, 6000);
+    }, 8000);
     return () => clearInterval(timer);
   }, []);
+
+  const handleTriggerGcSweep = useCallback(async () => {
+    try {
+      const updated = await triggerSystemGcSweep();
+      if (updated) {
+        setMemoryTelemetry(updated);
+        arcadeSoundEngine.play('UI_FEEDBACK');
+        appendLog(
+          `24/7 Memory Hygiene Sweep ausgeführt: Heap ${updated.heapUsedMb} MB · RSS ${updated.rssMb} MB · Sweeps: ${updated.autoSweepsCount}`
+        );
+      }
+    } catch {
+      // Ignore sweep error
+    }
+  }, [appendLog]);
+
+  const handleRefreshCmc = async () => {
+    if (isCmcLoading) return;
+    setIsCmcLoading(true);
+    try {
+      const payload = await refreshCmcIntelligence();
+      setCmcData(payload);
+      arcadeSoundEngine.play('UI_FEEDBACK');
+      appendLog(
+        `CoinMarketCap Intelligence & DEXscan synchronisiert (${payload.rankedAssets.length} Assets, ${payload.dexPairs.length} DEX Pools).`
+      );
+    } catch (err: any) {
+      arcadeSoundEngine.play('WARNING_MEME');
+      setErrorBanner(`CMC-Refresh Fehler: ${err.message}`);
+    } finally {
+      setIsCmcLoading(false);
+    }
+  };
 
   // Input Validation for Strategy Parameters
   const validateStrategyInput = (strat: StrategyDefinition): string | null => {
@@ -350,6 +592,7 @@ export function App() {
 
     const validationMsg = validateStrategyInput(targetStrat);
     if (validationMsg) {
+      arcadeSoundEngine.play('WARNING_MEME');
       setValidationError(validationMsg);
       setErrorBanner(validationMsg);
       appendLog(`Validierungsfehler: ${validationMsg}`);
@@ -385,14 +628,34 @@ export function App() {
           : [targetStrat, ...prev];
       });
 
+      if (result.metrics.netProfitUsd >= 0) {
+        arcadeSoundEngine.play('TAKE_PROFIT');
+        pushNotification(
+          'TAKE_PROFIT',
+          `Backtest Gewinn: ${targetStrat.symbol} (${targetStrat.timeframe})`,
+          `Net PnL: +$${result.metrics.netProfitUsd.toFixed(2)} (+${result.metrics.netReturnPct.toFixed(2)}%) · Win-Rate: ${result.metrics.winRatePct}%`,
+          targetStrat.symbol
+        );
+      } else {
+        arcadeSoundEngine.play('STOP_LOSS');
+        pushNotification(
+          'STOP_LOSS',
+          `Backtest Drawdown: ${targetStrat.symbol} (${targetStrat.timeframe})`,
+          `Net PnL: -$${Math.abs(result.metrics.netProfitUsd).toFixed(2)} (${result.metrics.netReturnPct.toFixed(2)}%) · Win-Rate: ${result.metrics.winRatePct}%`,
+          targetStrat.symbol
+        );
+      }
+
       appendLog(
         `Backtest abgeschlossen [${result.activeProvider}]: ${result.metrics.totalTrades} Trades · Net PnL: $${result.metrics.netProfitUsd.toFixed(2)} (${result.metrics.netReturnPct.toFixed(2)}%) · Gefiltert (Max 20 Cap): ${result.metrics.filteredByMax20Cap}`
       );
     } catch (err: any) {
       if (err.name === 'AbortError') {
+        arcadeSoundEngine.play('WARNING_MEME');
         setStatusNotice('Laufender Backtest-Job wurde vom Benutzer abgebrochen.');
         appendLog('Job durch Benutzer abgebrochen (AbortController).');
       } else {
+        arcadeSoundEngine.play('CRITICAL_ALARM');
         const msg = err.message || 'Unbekannter Fehler bei Backtest-Ausführung.';
         setErrorBanner(msg);
         appendLog(`FEHLER: ${msg}`);
@@ -427,6 +690,7 @@ export function App() {
   const handleSaveStrategy = async () => {
     const validationMsg = validateStrategyInput(activeStrategy);
     if (validationMsg) {
+      arcadeSoundEngine.play('WARNING_MEME');
       setValidationError(validationMsg);
       return;
     }
@@ -437,10 +701,12 @@ export function App() {
     try {
       const nextStore = await persistStrategyToBackend(updated, backtestResult || undefined);
       setStrategies(nextStore.strategies);
+      arcadeSoundEngine.play('UI_FEEDBACK');
       setStatusNotice(`Strategie "${updated.name}" persistent gespeichert.`);
       appendLog(`Strategie "${updated.name}" im Backend & LocalStorage gespeichert.`);
       setTimeout(() => setStatusNotice(null), 3500);
     } catch (err: any) {
+      arcadeSoundEngine.play('UI_FEEDBACK');
       setStatusNotice(`Lokal gespeichert (Server-Sync Hinweis: ${err.message})`);
       setTimeout(() => setStatusNotice(null), 3500);
     }
@@ -460,6 +726,7 @@ export function App() {
     };
     setStrategies((prev) => [fresh, ...prev]);
     setActiveStrategy(fresh);
+    arcadeSoundEngine.play('UI_FEEDBACK');
     setStatusNotice(`Neue Strategie "${fresh.name}" ($1,000 Basis, Max 20 Trades) angelegt.`);
     setTimeout(() => setStatusNotice(null), 3500);
   };
@@ -471,6 +738,7 @@ export function App() {
     const nextStore = await deleteStrategyFromBackend(idToDelete);
     setStrategies(nextStore.strategies);
     setActiveStrategy(nextStore.strategies[0]);
+    arcadeSoundEngine.play('WARNING_MEME');
     appendLog(`Strategie "${activeStrategy.name}" gelöscht.`);
     await handleRunBacktest(nextStore.strategies[0]);
   };
@@ -502,9 +770,11 @@ export function App() {
         const nextStore = await persistStrategyToBackend(normalized);
         setStrategies(nextStore.strategies);
         setActiveStrategy(normalized);
+        arcadeSoundEngine.play('SUCCESS_FANFARE');
         setStatusNotice(`Strategie "${normalized.name}" erfolgreich importiert.`);
         await handleRunBacktest(normalized);
       } catch (err: any) {
+        arcadeSoundEngine.play('WARNING_MEME');
         setErrorBanner(`JSON-Import fehlgeschlagen: ${err.message}`);
       }
     };
@@ -519,10 +789,18 @@ export function App() {
     try {
       const status = await triggerScreenerRunNow();
       setScreenerStatus(status);
+      const hasAnomalies = (status.tickers || []).some(
+        (t) =>
+          (t.signalTag && t.signalTag !== 'NORMAL') ||
+          t.rvol >= 2.0 ||
+          Math.abs(t.zScore) >= 2.0
+      );
+      arcadeSoundEngine.play(hasAnomalies ? 'SCREENER_ALERT' : 'UI_FEEDBACK');
       appendLog(
-        `Multi-Source Screener aktualisiert: ${status.tickers.length} Symbole über 6 Quellen gescannt.`
+        `Multi-Source Screener aktualisiert: ${status.tickers.length} Symbole über 8 Quellen gescannt.`
       );
     } catch (err: any) {
+      arcadeSoundEngine.play('WARNING_MEME');
       setErrorBanner(`Screener-Scan Fehler: ${err.message}`);
     } finally {
       setIsScreenerRefreshing(false);
@@ -533,17 +811,26 @@ export function App() {
     try {
       const status = await updateScreenerSchedule({ enabled, intervalSec });
       setScreenerStatus(status);
+      arcadeSoundEngine.play('UI_FEEDBACK');
       appendLog(`Screener-Schedule geändert: ${enabled ? `AKTIV (${intervalSec}s)` : 'PAUSIERT'}`);
     } catch (err: any) {
+      arcadeSoundEngine.play('WARNING_MEME');
       setErrorBanner(`Schedule-Konfiguration fehlgeschlagen: ${err.message}`);
     }
   };
 
   // Paper Account Order Execution (Enforces Max 20 Concurrent Trades & $1,000.00 Ledger)
-  const handleExecutePaperOrder = async (side: 'buy' | 'sell') => {
+  const handleExecutePaperOrder = async (
+    side: 'buy' | 'sell',
+    symbolOverride?: string,
+    sizeUsdOverride?: number,
+    priceOverride?: number
+  ) => {
     if (isSubmittingOrder) return;
+    const targetSymbol = symbolOverride || activeStrategy.symbol;
     const openPositionsCount = paperBridge?.paperLedger?.positions?.length || 0;
     if (side === 'buy' && openPositionsCount >= 20) {
+      arcadeSoundEngine.play('CRITICAL_ALARM');
       setErrorBanner(
         'M2 HARD-CAP BLOCKADE: Maximal 20 gleichzeitige Trades erlaubt (20/20 aktiv). Bitte zuerst Positionen schließen.'
       );
@@ -552,25 +839,63 @@ export function App() {
     setIsSubmittingOrder(true);
     setErrorBanner(null);
     try {
-      const lastCandlePrice = candles[candles.length - 1]?.close || 100;
+      const fallbackPrice =
+        priceOverride ||
+        (targetSymbol === activeStrategy.symbol ? candles[candles.length - 1]?.close : undefined) ||
+        activeTickerDossier?.price ||
+        undefined;
       const res = await executePaperBridgeOrder({
         signalId: `TERM-${Date.now().toString(36).toUpperCase()}`,
-        symbol: activeStrategy.symbol,
+        symbol: targetSymbol,
         side,
-        sizeUsd: Math.max(10, orderSizeUsd),
-        price: lastCandlePrice,
+        sizeUsd: Math.max(10, sizeUsdOverride ?? orderSizeUsd),
+        price: fallbackPrice,
         executionRoute: 'TERMINAL_MANUAL_TICKET',
         strategyId: activeStrategy.id,
         strategyName: activeStrategy.name,
       });
       const updatedBridge = await fetchPaperBridgeStatus().catch(() => null);
-      if (updatedBridge) setPaperBridge(updatedBridge);
+      if (updatedBridge) {
+        setPaperBridge(updatedBridge);
+        lastRealizedPnlRef.current = updatedBridge.paperLedger?.realized_pnl ?? null;
+        lastExecutionTxidRef.current = updatedBridge.lastExecution?.txid ?? null;
+      }
+      const dispVol = res.volume ?? (res as any).vol ?? 0;
+      const execPrice = Number(res.price || fallbackPrice || 100);
+
+      // Compute and persist SL/TP bracket when opening or adding to a position
+      if (side === 'buy') {
+        const riskPct = Math.max(0.008, Math.min(0.08, (activeStrategy.slAtrMult || 1.8) * 0.008));
+        const rewardPct = riskPct * Math.max(1.2, activeStrategy.tpRMultiple || 2.4);
+        const decimals = execPrice < 0.01 ? 6 : execPrice < 1 ? 4 : execPrice < 100 ? 3 : 2;
+        const slPrice = Number((execPrice * (1 - riskPct)).toFixed(decimals));
+        const tpPrice = Number((execPrice * (1 + rewardPct)).toFixed(decimals));
+        setPaperBrackets((prev) => ({
+          ...prev,
+          [res.symbol || targetSymbol]: {
+            entryPrice: execPrice,
+            stopLossPrice: slPrice,
+            takeProfitPrice: tpPrice,
+            isBreakEven: false,
+            side: 'LONG',
+          },
+        }));
+      }
+
+      arcadeSoundEngine.play('ORDER_FILL');
+      pushNotification(
+        'ORDER_FILL',
+        `Paper ${side.toUpperCase()} ausgeführt: ${res.symbol || targetSymbol}`,
+        `${dispVol} ${res.symbol || targetSymbol} @ $${formatPrice(execPrice)} (${res.txid})`,
+        res.symbol || targetSymbol
+      );
       setStatusNotice(
-        `Paper ${side.toUpperCase()} ausgeführt: ${res.volume} ${res.symbol} @ $${res.price.toFixed(2)} (${res.txid})`
+        `Paper ${side.toUpperCase()} ausgeführt: ${dispVol} ${res.symbol} @ $${formatPrice(res.price)} (${res.txid})`
       );
       appendLog(res.journalText);
       setTimeout(() => setStatusNotice(null), 4000);
     } catch (err: any) {
+      arcadeSoundEngine.play('CRITICAL_ALARM');
       setErrorBanner(`Order-Ausführung abgelehnt: ${err.message}`);
     } finally {
       setIsSubmittingOrder(false);
@@ -579,10 +904,17 @@ export function App() {
 
   // Emergency Kill Switch (Flatten All Open Trades & Bots)
   const handleEmergencyFlattenAll = async () => {
+    arcadeSoundEngine.play('CRITICAL_ALARM', { force: true });
     try {
       const res = await triggerEmergencyFlatten();
       const updatedBridge = await fetchPaperBridgeStatus().catch(() => null);
       if (updatedBridge) setPaperBridge(updatedBridge);
+      setPaperBrackets({});
+      pushNotification(
+        'CRITICAL_ALARM',
+        'EMERGENCY KILL SWITCH AUSGEFÜHRT',
+        res.message || 'Alle offenen Positionen & Orders wurden sofort glattgestellt.'
+      );
       setStatusNotice(res.message || 'Alle Positionen glattgestellt (Kill Switch ausgeführt).');
       appendLog(`EMERGENCY KILL SWITCH: ${res.message || 'Flatten All ausgeführt'}`);
       setTimeout(() => setStatusNotice(null), 4500);
@@ -597,10 +929,12 @@ export function App() {
       await paperReset(1000);
       const updatedBridge = await fetchPaperBridgeStatus().catch(() => null);
       if (updatedBridge) setPaperBridge(updatedBridge);
+      arcadeSoundEngine.play('UI_FEEDBACK');
       setStatusNotice('Paper-Konto auf $1,000.00 Startkapital zurückgesetzt.');
       appendLog('Paper-Konto via CLI auf $1,000.00 zurückgesetzt.');
       setTimeout(() => setStatusNotice(null), 3500);
     } catch (err: any) {
+      arcadeSoundEngine.play('WARNING_MEME');
       setErrorBanner(`Paper-Reset Fehler: ${err.message}`);
     }
   };
@@ -713,6 +1047,154 @@ export function App() {
     if (val < 100) return val.toFixed(3);
     return val.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   };
+
+  // Resolve or deterministically compute SL & TP bracket for any open Paper position
+  const resolvePaperBracket = useCallback(
+    (pos: { pair: string; entry_price: number; side?: string; type?: string }) => {
+      const existing = paperBrackets[pos.pair];
+      const side: 'LONG' | 'SHORT' =
+        (pos.side || (pos.type === 'sell' ? 'SHORT' : 'LONG')) === 'SHORT' ? 'SHORT' : 'LONG';
+      const entry = Number(pos.entry_price || 100);
+      if (existing && Math.abs(existing.entryPrice - entry) / Math.max(entry, 1e-6) < 0.05) {
+        return existing;
+      }
+      const riskPct = Math.max(0.008, Math.min(0.08, (activeStrategy.slAtrMult || 1.8) * 0.008));
+      const rewardPct = riskPct * Math.max(1.2, activeStrategy.tpRMultiple || 2.4);
+      const decimals = entry < 0.01 ? 6 : entry < 1 ? 4 : entry < 100 ? 3 : 2;
+      const stopLossPrice =
+        side === 'LONG'
+          ? Number((entry * (1 - riskPct)).toFixed(decimals))
+          : Number((entry * (1 + riskPct)).toFixed(decimals));
+      const takeProfitPrice =
+        side === 'LONG'
+          ? Number((entry * (1 + rewardPct)).toFixed(decimals))
+          : Number((entry * (1 - rewardPct)).toFixed(decimals));
+      return {
+        entryPrice: entry,
+        stopLossPrice,
+        takeProfitPrice,
+        isBreakEven: false,
+        side,
+      };
+    },
+    [paperBrackets, activeStrategy.slAtrMult, activeStrategy.tpRMultiple]
+  );
+
+  // 1-Click Break-Even for Open Paper Position
+  const handleSetPaperBreakEven = useCallback(
+    (pos: { pair: string; entry_price: number; side?: string; type?: string }) => {
+      const current = resolvePaperBracket(pos);
+      const entry = Number(pos.entry_price || current.entryPrice);
+      setPaperBrackets((prev) => ({
+        ...prev,
+        [pos.pair]: {
+          ...current,
+          entryPrice: entry,
+          stopLossPrice: entry,
+          isBreakEven: true,
+        },
+      }));
+      arcadeSoundEngine.play('UI_FEEDBACK');
+      setStatusNotice(`Stop-Loss für ${pos.pair} auf Break-Even ($${formatPrice(entry)}) nachgezogen.`);
+      appendLog(`Break-Even SL aktiviert für ${pos.pair} @ $${formatPrice(entry)}.`);
+      setTimeout(() => setStatusNotice(null), 3500);
+    },
+    [resolvePaperBracket, appendLog]
+  );
+
+  // Open Paper Positions matching the currently active Chart Symbol for horizontal Entry/SL/TP rendering
+  const chartOpenPaperPositions = useMemo<ChartOpenPaperPosition[]>(() => {
+    const activeSym = activeStrategy.symbol.toUpperCase();
+    return paperOpenPositions
+      .filter((pos) => (pos.pair || '').toUpperCase() === activeSym)
+      .map((pos) => {
+        const bracket = resolvePaperBracket(pos);
+        const qty = Number(pos.vol ?? pos.volume ?? 0);
+        return {
+          pair: pos.pair,
+          side: bracket.side,
+          entryPrice: Number(pos.entry_price || bracket.entryPrice),
+          stopLossPrice: bracket.stopLossPrice,
+          takeProfitPrice: bracket.takeProfitPrice,
+          unrealizedPnl: Number(pos.unrealized_pnl || 0),
+          qty,
+          isBreakEven: bracket.isBreakEven,
+        };
+      });
+  }, [paperOpenPositions, activeStrategy.symbol, resolvePaperBracket]);
+
+  // Background Auto-SL/TP Execution Watcher for Open Paper Positions
+  useEffect(() => {
+    if (!paperOpenPositions.length) return;
+
+    for (const pos of paperOpenPositions) {
+      const pair = pos.pair;
+      if (!pair || autoClosingPairsRef.current.has(pair)) continue;
+
+      const bracket = resolvePaperBracket(pos);
+      const liveWsPrice = wsMarkets[pair]?.lastPrice;
+      const currentPrice = Number(liveWsPrice || pos.current_price || 0);
+      if (currentPrice <= 0) continue;
+
+      const isLong = bracket.side === 'LONG';
+      const hitTp = isLong
+        ? currentPrice >= bracket.takeProfitPrice
+        : currentPrice <= bracket.takeProfitPrice;
+      const hitSl = isLong
+        ? currentPrice <= bracket.stopLossPrice
+        : currentPrice >= bracket.stopLossPrice;
+
+      if (hitTp || hitSl) {
+        autoClosingPairsRef.current.add(pair);
+        const qty = Number(pos.vol ?? pos.volume ?? 0);
+        const closeNotionalUsd = Math.max(10, qty * currentPrice * 1.02);
+        const eventType: SoundEventType = hitTp ? 'TAKE_PROFIT' : 'STOP_LOSS';
+
+        executePaperBridgeOrder({
+          signalId: `AUTO-${hitTp ? 'TP' : 'SL'}-${Date.now().toString(36).toUpperCase()}`,
+          symbol: pair,
+          side: 'sell',
+          sizeUsd: closeNotionalUsd,
+          price: currentPrice,
+          executionRoute: hitTp ? 'AUTO_TAKE_PROFIT_GUARD' : 'AUTO_STOP_LOSS_GUARD',
+          strategyId: activeStrategy.id,
+          strategyName: activeStrategy.name,
+        })
+          .then(async () => {
+            const updatedBridge = await fetchPaperBridgeStatus().catch(() => null);
+            if (updatedBridge) setPaperBridge(updatedBridge);
+            arcadeSoundEngine.play(eventType);
+            pushNotification(
+              eventType,
+              `Auto-${hitTp ? 'Take-Profit' : 'Stop-Loss'} ausgelöst: ${pair}`,
+              `Position geschlossen @ $${formatPrice(currentPrice)} (Ziel: $${formatPrice(
+                hitTp ? bracket.takeProfitPrice : bracket.stopLossPrice
+              )})`,
+              pair
+            );
+            appendLog(
+              `AUTO-${hitTp ? 'TP' : 'SL'} für ${pair} ausgeführt @ $${formatPrice(currentPrice)}.`
+            );
+          })
+          .catch(() => {
+            // Silent guard on transient error
+          })
+          .finally(() => {
+            setTimeout(() => {
+              autoClosingPairsRef.current.delete(pair);
+            }, 4000);
+          });
+      }
+    }
+  }, [
+    paperOpenPositions,
+    wsMarkets,
+    resolvePaperBracket,
+    activeStrategy.id,
+    activeStrategy.name,
+    pushNotification,
+    appendLog,
+  ]);
 
   return (
     <div className="h-screen w-screen overflow-hidden bg-[#07090E] text-[#E6EDF3] flex flex-col select-none">
@@ -829,6 +1311,25 @@ export function App() {
             <span className="font-bold text-[#00E5FF]">{currentConcurrentCount} / 20</span>
             <span className="text-[9px] text-[#8B95A5]">(Peak BT: {backtestActivePeak}/20)</span>
           </div>
+
+          {/* CoinMarketCap Global Fear & Greed + BTC Dominance Telemetry Badge */}
+          {cmcData && (
+            <button
+              type="button"
+              onClick={() => setBottomTab('CMC')}
+              title="Klicken für CoinMarketCap Ranked Screener, DEX On-Chain Pools & Exchange Liquidity"
+              className="hidden 2xl:flex items-center gap-1.5 bg-[#07090E] border border-[#3861FB]/50 hover:border-[#60A5FA] px-2 py-1 text-[10px]"
+            >
+              <Flame className="w-3 h-3 text-[#60A5FA]" />
+              <span className="text-[#60A5FA] font-bold">
+                CMC F&G: {cmcData.globalMetrics.fearAndGreedIndex}
+              </span>
+              <span className="text-[#8B95A5]">|</span>
+              <span className="text-[#F59E0B]">
+                BTC {cmcData.globalMetrics.btcDominancePct}%
+              </span>
+            </button>
+          )}
         </div>
 
         {/* Right: Job Status + Cancel Button, Environment Switch, Diagnostics & Emergency Kill Switch */}
@@ -858,8 +1359,10 @@ export function App() {
               type="button"
               onClick={() => {
                 if (executionEnvironment === 'PAPER') {
+                  arcadeSoundEngine.play('WARNING_MEME');
                   setLiveConfirmStep(true);
                 } else {
+                  arcadeSoundEngine.play('UI_FEEDBACK');
                   setExecutionEnvironment('PAPER');
                   appendLog('Modus gewechselt auf PAPER EXECUTION ($1,000.00 Konto).');
                 }
@@ -878,6 +1381,7 @@ export function App() {
               <button
                 type="button"
                 onClick={() => {
+                  arcadeSoundEngine.play('CRITICAL_ALARM');
                   setExecutionEnvironment('LIVE_ARMED');
                   setLiveConfirmStep(false);
                   appendLog('WARNUNG: Modus auf LIVE EXECUTION geschaltet (M8 Gate aktiv).');
@@ -888,7 +1392,10 @@ export function App() {
               </button>
               <button
                 type="button"
-                onClick={() => setLiveConfirmStep(false)}
+                onClick={() => {
+                  arcadeSoundEngine.play('UI_FEEDBACK');
+                  setLiveConfirmStep(false);
+                }}
                 className="px-1 bg-[#1B2230] text-[#E6EDF3]"
               >
                 NEIN
@@ -896,21 +1403,66 @@ export function App() {
             </div>
           )}
 
+          {/* Terminal-Synth-Chimes & Mute Toggle */}
+          <ArcadeAudioControl />
+
+          {/* Header Notification Bell (Live Audio- & Market-Event History) */}
+          <TerminalNotificationBell
+            notifications={notifications}
+            onMarkAllRead={() =>
+              setNotifications((prev) => prev.map((n) => (n.read ? n : { ...n, read: true })))
+            }
+            onClearAll={() => {
+              setNotifications([]);
+              setActiveToasts([]);
+            }}
+            onSelectNotification={(item) => {
+              setNotifications((prev) =>
+                prev.map((n) => (n.id === item.id ? { ...n, read: true } : n))
+              );
+              if (item.symbol && item.symbol.toUpperCase() !== activeStrategy.symbol.toUpperCase()) {
+                handleSymbolOrTimeframeChange(item.symbol, activeStrategy.timeframe);
+              }
+            }}
+          />
+
           {/* Google Drive Blueprint Sync */}
           <button
             type="button"
-            onClick={() => setIsDriveModalOpen(true)}
+            onClick={() => {
+              arcadeSoundEngine.play('UI_FEEDBACK');
+              setIsDriveModalOpen(true);
+            }}
             title="Strategie-Blueprints aus Google Drive laden"
             className="p-1.5 bg-[#07090E] border border-[#1B2230] text-[#8B95A5] hover:text-[#00E5FF] hover:border-[#00E5FF]/40"
           >
             <HardDrive className="w-3.5 h-3.5" />
           </button>
 
+          {/* 24/7 Memory Watchdog Telemetry Badge */}
+          {memoryTelemetry && (
+            <button
+              type="button"
+              onClick={() => setIsDiagnosticsOpen(true)}
+              title={`24/7 Memory Watchdog · Server Heap: ${memoryTelemetry.heapUsedMb} MB · RSS: ${memoryTelemetry.rssMb} MB · Auto-Sweeps: ${memoryTelemetry.autoSweepsCount}`}
+              className={`hidden xl:flex items-center gap-1 px-2 py-1 border text-[10px] font-mono tabular-nums ${
+                memoryTelemetry.status === 'OPTIMAL'
+                  ? 'bg-[#07090E] border-[#089981]/50 text-[#089981]'
+                  : memoryTelemetry.status === 'ELEVATED'
+                  ? 'bg-[#F59E0B]/15 border-[#F59E0B]/60 text-[#F59E0B]'
+                  : 'bg-[#F23645]/15 border-[#F23645] text-[#F23645]'
+              }`}
+            >
+              <span>RAM {memoryTelemetry.heapUsedMb}MB</span>
+              <span className="text-[9px] opacity-80">24/7</span>
+            </button>
+          )}
+
           {/* Diagnostics Drawer Trigger */}
           <button
             type="button"
             onClick={() => setIsDiagnosticsOpen(true)}
-            title="System-Diagnose & 6-Provider-Kaskade öffnen"
+            title="System-Diagnose, 24/7 RAM-Watchdog & 8-Provider-Kaskade öffnen"
             className="px-2 py-1 bg-[#07090E] border border-[#1B2230] text-[10px] font-mono text-[#8B95A5] hover:text-[#E6EDF3] flex items-center gap-1"
           >
             <Terminal className="w-3 h-3 text-[#00E5FF]" />
@@ -929,6 +1481,21 @@ export function App() {
           </button>
         </div>
       </header>
+
+      {/* 6-Second Auto-Dismiss Live Event Toast Stack (Synchronized with Audio Chimes) */}
+      <LiveEventToastStack
+        toasts={activeToasts}
+        onDismissToast={dismissToast}
+        onSelectToast={(item) => {
+          dismissToast(item.id);
+          setNotifications((prev) =>
+            prev.map((n) => (n.id === item.id ? { ...n, read: true } : n))
+          );
+          if (item.symbol && item.symbol.toUpperCase() !== activeStrategy.symbol.toUpperCase()) {
+            handleSymbolOrTimeframeChange(item.symbol, activeStrategy.timeframe);
+          }
+        }}
+      />
 
       {/* Error or Status Notification Strip */}
       {(errorBanner || statusNotice) && (
@@ -1604,7 +2171,7 @@ export function App() {
                   className="w-full bg-[#0C1017] border border-[#1B2230] px-2 py-1 text-xs font-mono text-[#E6EDF3] focus:outline-none focus:border-[#00E5FF]"
                 />
 
-                {/* 6-Provider Filter Pills */}
+                {/* 7-Provider Filter Pills (Kraken -> CCXT -> CMC -> Gainium -> Binance -> Alpaca -> Alpha Vantage) */}
                 <div className="flex flex-wrap gap-1">
                   {(
                     [
@@ -1612,6 +2179,8 @@ export function App() {
                       'ANOMALIES',
                       'KRAKEN',
                       'CCXT',
+                      'MEXC',
+                      'CMC',
                       'GAINIUM',
                       'BINANCE',
                       'ALPACA',
@@ -1664,6 +2233,11 @@ export function App() {
                           <td className="py-1.5 px-2">
                             <div className="flex items-center gap-1.5">
                               <span className="font-bold text-[#00E5FF]">{row.symbol}</span>
+                              {row.cmcRank && (
+                                <span className="text-[8px] px-1 border border-[#3861FB]/40 bg-[#3861FB]/15 text-[#60A5FA]">
+                                  #{row.cmcRank}
+                                </span>
+                              )}
                               <span
                                 className={`text-[8px] px-1 border ${
                                   PROVIDER_BADGE_STYLES[row.provider]
@@ -1782,6 +2356,35 @@ export function App() {
                     </div>
                   </div>
                 )}
+
+                {/* Direct 1-Click Timeframe Buttons in Chart Header */}
+                <div className="flex items-center gap-1 pl-3 border-l border-[#1B2230]">
+                  <span className="text-[9px] text-[#8B95A5] uppercase mr-1 hidden sm:inline">
+                    TF:
+                  </span>
+                  {TIMEFRAMES.map((tf) => {
+                    const isActive = activeStrategy.timeframe === tf;
+                    return (
+                      <button
+                        key={tf}
+                        type="button"
+                        disabled={isJobRunning}
+                        onClick={() => {
+                          arcadeSoundEngine.play('UI_FEEDBACK');
+                          handleSymbolOrTimeframeChange(activeStrategy.symbol, tf);
+                        }}
+                        title={`Zeitrahmen direkt auf ${tf} umschalten und Backtest neu berechnen`}
+                        className={`px-2 py-0.5 text-[10px] font-mono tabular-nums border transition-colors whitespace-nowrap shrink-0 ${
+                          isActive
+                            ? 'bg-[#00E5FF]/20 border-[#00E5FF] text-[#00E5FF] font-bold'
+                            : 'bg-[#07090E] border-[#1B2230] text-[#8B95A5] hover:text-[#E6EDF3] hover:border-[#263042]'
+                        }`}
+                      >
+                        {tf}
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
             </div>
 
@@ -1863,6 +2466,7 @@ export function App() {
             onSelectTrade={setSelectedTradeId}
             fastEmaPeriod={activeStrategy.advanced.fastPeriod}
             slowEmaPeriod={activeStrategy.advanced.slowPeriod}
+            openPaperPositions={chartOpenPaperPositions}
           />
 
           {/* 4. Bottom Evaluation & Execution Dock */}
@@ -1880,6 +2484,18 @@ export function App() {
                   }`}
                 >
                   TRADE-LISTE & LOG ({backtestResult?.trades.length || 0})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setBottomTab('CMC')}
+                  className={`px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider border-b-2 flex items-center gap-1 ${
+                    bottomTab === 'CMC'
+                      ? 'border-[#3861FB] text-[#60A5FA] bg-[#0C1017]'
+                      : 'border-transparent text-[#8B95A5] hover:text-[#E6EDF3]'
+                  }`}
+                >
+                  <Globe className="w-3 h-3 text-[#60A5FA]" />
+                  <span>CMC INTELLIGENCE & DEX ({cmcData?.rankedAssets.length || 19})</span>
                 </button>
                 <button
                   type="button"
@@ -1922,7 +2538,10 @@ export function App() {
                 {backtestResult && (
                   <button
                     type="button"
-                    onClick={() => exportTradesToCsv(backtestResult)}
+                    onClick={() => {
+                      arcadeSoundEngine.play('UI_FEEDBACK');
+                      exportTradesToCsv(backtestResult);
+                    }}
                     className="px-2 py-0.5 bg-[#0C1017] border border-[#1B2230] text-[10px] font-mono text-[#8B95A5] hover:text-[#00E5FF] flex items-center gap-1"
                   >
                     <Download className="w-2.5 h-2.5" />
@@ -1931,7 +2550,10 @@ export function App() {
                 )}
                 <button
                   type="button"
-                  onClick={() => exportStrategyAndResultToJson(activeStrategy, backtestResult)}
+                  onClick={() => {
+                    arcadeSoundEngine.play('UI_FEEDBACK');
+                    exportStrategyAndResultToJson(activeStrategy, backtestResult);
+                  }}
                   className="px-2 py-0.5 bg-[#0C1017] border border-[#1B2230] text-[10px] font-mono text-[#8B95A5] hover:text-[#00E5FF] flex items-center gap-1"
                 >
                   <Download className="w-2.5 h-2.5" />
@@ -1939,13 +2561,14 @@ export function App() {
                 </button>
                 <button
                   type="button"
-                  onClick={() =>
+                  onClick={() => {
+                    arcadeSoundEngine.play('UI_FEEDBACK');
                     exportPineScriptFile(
                       activeStrategy.name,
                       activeStrategy.symbol,
                       editablePineScript || backtestResult?.pineScriptV6 || ''
-                    )
-                  }
+                    );
+                  }}
                   className="px-2 py-0.5 bg-[#0C1017] border border-[#1B2230] text-[10px] font-mono text-[#A855F7] hover:border-[#A855F7] flex items-center gap-1"
                 >
                   <Code2 className="w-2.5 h-2.5" />
@@ -2084,128 +2707,154 @@ export function App() {
               </div>
             )}
 
+            {/* TAB 1B: COINMARKETCAP INTELLIGENCE, RANKED SCREENER, DEX ON-CHAIN & EXCHANGE LIQUIDITY */}
+            {bottomTab === 'CMC' && (
+              <div className="flex-1 min-h-0 overflow-hidden">
+                <TerminalCmcIntelligenceTab
+                  data={cmcData}
+                  isLoading={isCmcLoading}
+                  activeSymbol={activeStrategy.symbol}
+                  onSelectSymbolAndLoad={(sym, _runImmediately) => {
+                    handleSymbolOrTimeframeChange(sym, activeStrategy.timeframe);
+                  }}
+                  onRefresh={handleRefreshCmc}
+                />
+              </div>
+            )}
+
             {/* TAB 2: PERFORMANCE, RISK METRICS & SHADOW ENGINE COUNTER-ANALYSIS */}
             {bottomTab === 'METRICS' && backtestResult && (
-              <div className="flex-1 overflow-y-auto p-3 grid grid-cols-1 md:grid-cols-3 gap-3 font-mono tabular-nums text-xs">
-                {/* Col 1: Core Return & Quality */}
-                <div className="bg-[#07090E] border border-[#1B2230] p-2.5 space-y-1.5">
-                  <div className="text-[10px] font-bold text-[#00E5FF] uppercase border-b border-[#1B2230] pb-1">
-                    RENDITE & TRADE-QUALITÄT ($1,000 BASIS)
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-[#8B95A5]">Startkapital:</span>
-                    <span>${activeStrategy.initialCapital.toFixed(2)}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-[#8B95A5]">End-Equity:</span>
-                    <span className="font-bold text-[#E6EDF3]">
-                      ${backtestResult.metrics.finalEquity.toFixed(2)}
-                    </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-[#8B95A5]">Netto-Gewinn (Net PnL):</span>
-                    <span
-                      className={`font-bold ${
-                        backtestResult.metrics.netProfitUsd >= 0
-                          ? 'text-[#089981]'
-                          : 'text-[#F23645]'
-                      }`}
-                    >
-                      ${backtestResult.metrics.netProfitUsd.toFixed(2)} (
-                      {backtestResult.metrics.netReturnPct.toFixed(2)}%)
-                    </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-[#8B95A5]">Profit Factor:</span>
-                    <span className="font-bold">{backtestResult.metrics.profitFactor}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-[#8B95A5]">Trefferquote (Win Rate):</span>
-                    <span className="font-bold">{backtestResult.metrics.winRatePct}%</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-[#8B95A5]">Sharpe / Trade Quality (μ/σ):</span>
-                    <span className="text-[#00E5FF] font-bold">
-                      {backtestResult.metrics.sharpeRatio} /{' '}
-                      {backtestResult.metrics.tradeQualityMuSigma}
-                    </span>
-                  </div>
-                </div>
+              <div className="flex-1 overflow-y-auto p-3 space-y-3 font-mono tabular-nums text-xs">
+                {/* Visual Heatmap for Equity Curve with High Drawdown Shading */}
+                <EquityDrawdownHeatmap
+                  equityCurve={backtestResult.equityCurve}
+                  initialCapital={activeStrategy.initialCapital}
+                  symbol={activeStrategy.symbol}
+                  timeframe={activeStrategy.timeframe}
+                  showShadowCurve={backtestResult.shadow.enabled}
+                />
 
-                {/* Col 2: Risk, Drawdown & M2 20-Trade Cap Telemetry */}
-                <div className="bg-[#07090E] border border-[#1B2230] p-2.5 space-y-1.5">
-                  <div className="text-[10px] font-bold text-[#F23645] uppercase border-b border-[#1B2230] pb-1">
-                    DRAWDOWN, KOSTEN & 20-TRADE-CAP
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                  {/* Col 1: Core Return & Quality */}
+                  <div className="bg-[#07090E] border border-[#1B2230] p-2.5 space-y-1.5">
+                    <div className="text-[10px] font-bold text-[#00E5FF] uppercase border-b border-[#1B2230] pb-1">
+                      RENDITE & TRADE-QUALITÄT ($1,000 BASIS)
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-[#8B95A5]">Startkapital:</span>
+                      <span>${activeStrategy.initialCapital.toFixed(2)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-[#8B95A5]">End-Equity:</span>
+                      <span className="font-bold text-[#E6EDF3]">
+                        ${backtestResult.metrics.finalEquity.toFixed(2)}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-[#8B95A5]">Netto-Gewinn (Net PnL):</span>
+                      <span
+                        className={`font-bold ${
+                          backtestResult.metrics.netProfitUsd >= 0
+                            ? 'text-[#089981]'
+                            : 'text-[#F23645]'
+                        }`}
+                      >
+                        ${backtestResult.metrics.netProfitUsd.toFixed(2)} (
+                        {backtestResult.metrics.netReturnPct.toFixed(2)}%)
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-[#8B95A5]">Profit Factor:</span>
+                      <span className="font-bold">{backtestResult.metrics.profitFactor}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-[#8B95A5]">Trefferquote (Win Rate):</span>
+                      <span className="font-bold">{backtestResult.metrics.winRatePct}%</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-[#8B95A5]">Sharpe / Trade Quality (μ/σ):</span>
+                      <span className="text-[#00E5FF] font-bold">
+                        {backtestResult.metrics.sharpeRatio} /{' '}
+                        {backtestResult.metrics.tradeQualityMuSigma}
+                      </span>
+                    </div>
                   </div>
-                  <div className="flex justify-between">
-                    <span className="text-[#8B95A5]">Max Drawdown:</span>
-                    <span className="text-[#F23645] font-bold">
-                      -${backtestResult.metrics.maxDrawdownUsd.toFixed(2)} (-
-                      {backtestResult.metrics.maxDrawdownPct.toFixed(2)}%)
-                    </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-[#8B95A5]">Recovery Factor:</span>
-                    <span>{backtestResult.metrics.recoveryFactor}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-[#8B95A5]">Kommissionen gesamt:</span>
-                    <span>${backtestResult.metrics.totalFeesUsd.toFixed(2)}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-[#8B95A5]">Peak gleichzeitige Trades:</span>
-                    <span className="text-[#00E5FF] font-bold">
-                      {backtestResult.metrics.peakConcurrentTrades} / 20
-                    </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-[#8B95A5]">Gefiltert (Max 20 Cap):</span>
-                    <span className="text-[#F59E0B] font-bold">
-                      {backtestResult.metrics.filteredByMax20Cap} Signale
-                    </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-[#8B95A5]">Gefiltert (CosPhi Chop):</span>
-                    <span>{backtestResult.metrics.filteredByCosPhiChop} Signale</span>
-                  </div>
-                </div>
 
-                {/* Col 3: Shadow Engine (Negative Counter-Strategy Comparison) */}
-                <div className="bg-[#07090E] border border-[#A855F7]/40 p-2.5 space-y-1.5">
-                  <div className="text-[10px] font-bold text-[#A855F7] uppercase border-b border-[#1B2230] pb-1">
-                    SHADOW ENGINE (INVERSE GEGENSTRATEGIE)
+                  {/* Col 2: Risk, Drawdown & M2 20-Trade Cap Telemetry */}
+                  <div className="bg-[#07090E] border border-[#1B2230] p-2.5 space-y-1.5">
+                    <div className="text-[10px] font-bold text-[#F23645] uppercase border-b border-[#1B2230] pb-1">
+                      DRAWDOWN, KOSTEN & 20-TRADE-CAP
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-[#8B95A5]">Max Drawdown:</span>
+                      <span className="text-[#F23645] font-bold">
+                        -${backtestResult.metrics.maxDrawdownUsd.toFixed(2)} (-
+                        {backtestResult.metrics.maxDrawdownPct.toFixed(2)}%)
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-[#8B95A5]">Recovery Factor:</span>
+                      <span>{backtestResult.metrics.recoveryFactor}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-[#8B95A5]">Kommissionen gesamt:</span>
+                      <span>${backtestResult.metrics.totalFeesUsd.toFixed(2)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-[#8B95A5]">Peak gleichzeitige Trades:</span>
+                      <span className="text-[#00E5FF] font-bold">
+                        {backtestResult.metrics.peakConcurrentTrades} / 20
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-[#8B95A5]">Gefiltert (Max 20 Cap):</span>
+                      <span className="text-[#F59E0B] font-bold">
+                        {backtestResult.metrics.filteredByMax20Cap} Signale
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-[#8B95A5]">Gefiltert (CosPhi Chop):</span>
+                      <span>{backtestResult.metrics.filteredByCosPhiChop} Signale</span>
+                    </div>
                   </div>
-                  <div className="flex justify-between">
-                    <span className="text-[#8B95A5]">Inverse Net PnL:</span>
-                    <span
-                      className={`font-bold ${
-                        backtestResult.shadow.inverseNetPnlUsd >= 0
-                          ? 'text-[#089981]'
-                          : 'text-[#F23645]'
-                      }`}
-                    >
-                      ${backtestResult.shadow.inverseNetPnlUsd.toFixed(2)} (
-                      {backtestResult.shadow.inverseReturnPct.toFixed(2)}%)
-                    </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-[#8B95A5]">Inverse Win Rate:</span>
-                    <span>{backtestResult.shadow.inverseWinRatePct}%</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-[#8B95A5]">Shadow Stops gebrochen:</span>
-                    <span className="text-[#A855F7] font-bold">
-                      {backtestResult.shadow.shadowStopsBrokenCount}x gefeuert
-                    </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-[#8B95A5]">Adaptives Auto-TP Quantil:</span>
-                    <span className="text-[#00E5FF] font-bold">
-                      {backtestResult.shadow.adaptiveMfeQuantileR}R
-                    </span>
-                  </div>
-                  <div className="text-[10px] text-[#8B95A5] pt-1 border-t border-[#1B2230]">
-                    {backtestResult.shadow.recommendation}
+
+                  {/* Col 3: Shadow Engine (Negative Counter-Strategy Comparison) */}
+                  <div className="bg-[#07090E] border border-[#A855F7]/40 p-2.5 space-y-1.5">
+                    <div className="text-[10px] font-bold text-[#A855F7] uppercase border-b border-[#1B2230] pb-1">
+                      SHADOW ENGINE (INVERSE GEGENSTRATEGIE)
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-[#8B95A5]">Inverse Net PnL:</span>
+                      <span
+                        className={`font-bold ${
+                          backtestResult.shadow.inverseNetPnlUsd >= 0
+                            ? 'text-[#089981]'
+                            : 'text-[#F23645]'
+                        }`}
+                      >
+                        ${backtestResult.shadow.inverseNetPnlUsd.toFixed(2)} (
+                        {backtestResult.shadow.inverseReturnPct.toFixed(2)}%)
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-[#8B95A5]">Inverse Win Rate:</span>
+                      <span>{backtestResult.shadow.inverseWinRatePct}%</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-[#8B95A5]">Shadow Stops gebrochen:</span>
+                      <span className="text-[#A855F7] font-bold">
+                        {backtestResult.shadow.shadowStopsBrokenCount}x gefeuert
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-[#8B95A5]">Adaptives Auto-TP Quantil:</span>
+                      <span className="text-[#00E5FF] font-bold">
+                        {backtestResult.shadow.adaptiveMfeQuantileR}R
+                      </span>
+                    </div>
+                    <div className="text-[10px] text-[#8B95A5] pt-1 border-t border-[#1B2230]">
+                      {backtestResult.shadow.recommendation}
+                    </div>
                   </div>
                 </div>
               </div>
@@ -2298,36 +2947,132 @@ export function App() {
                       Keine offenen Positionen im Paper-Ledger (0 / 20 belegt · $1,000.00 verfügbar).
                     </div>
                   ) : (
-                    <div className="overflow-y-auto max-h-36">
-                      <table className="w-full text-left border-collapse text-[11px]">
+                    <div className="overflow-y-auto max-h-40">
+                      <table className="w-full text-left border-collapse text-[11px] font-mono tabular-nums">
                         <thead className="text-[9px] text-[#8B95A5] uppercase border-b border-[#1B2230]">
                           <tr>
-                            <th className="py-1">PAIR</th>
-                            <th className="py-1">SIDE</th>
-                            <th className="py-1 text-right">VOLUMEN</th>
-                            <th className="py-1 text-right">ENTRY</th>
-                            <th className="py-1 text-right">MARKT</th>
-                            <th className="py-1 text-right">UNREAL. PNL</th>
+                            <th className="py-1 px-1.5">ZEIT / TXID</th>
+                            <th className="py-1 px-1.5">PAIR</th>
+                            <th className="py-1 px-1.5">SIDE</th>
+                            <th className="py-1 px-1.5 text-right">VOLUMEN (QTY / $)</th>
+                            <th className="py-1 px-1.5 text-right">ENTRY / MARKT</th>
+                            <th className="py-1 px-1.5 text-right">AUTO-SL / AUTO-TP</th>
+                            <th className="py-1 px-1.5 text-right">UNREAL. PNL</th>
+                            <th className="py-1 px-1.5 text-right">AKTION</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-[#1B2230]/50">
-                          {paperOpenPositions.map((pos, idx) => (
-                            <tr key={idx}>
-                              <td className="py-1 font-bold text-[#00E5FF]">{pos.pair}</td>
-                              <td className="py-1 uppercase text-[#089981]">{pos.side}</td>
-                              <td className="py-1 text-right">{pos.volume}</td>
-                              <td className="py-1 text-right">${formatPrice(pos.entry_price)}</td>
-                              <td className="py-1 text-right">${formatPrice(pos.current_price)}</td>
-                              <td
-                                className={`py-1 text-right font-bold ${
-                                  pos.unrealized_pnl >= 0 ? 'text-[#089981]' : 'text-[#F23645]'
-                                }`}
-                              >
-                                ${pos.unrealized_pnl.toFixed(2)} (
-                                {pos.unrealized_pnl_pct.toFixed(2)}%)
-                              </td>
-                            </tr>
-                          ))}
+                          {paperOpenPositions.map((pos, idx) => {
+                            const qty = Number(pos.vol ?? pos.volume ?? 0);
+                            const sideLabel = pos.side || (pos.type === 'sell' ? 'SHORT' : 'LONG');
+                            const bracket = resolvePaperBracket(pos);
+                            const timeLabel =
+                              pos.opened_at_formatted ||
+                              (pos.opened_at
+                                ? new Date(pos.opened_at).toLocaleTimeString('de-DE', {
+                                    hour12: false,
+                                  })
+                                : new Date().toLocaleTimeString('de-DE', { hour12: false }));
+                            return (
+                              <tr key={`${pos.pair}-${idx}`} className="hover:bg-[#111722]">
+                                <td className="py-1 px-1.5 text-[10px] text-[#8B95A5]">
+                                  <div>{timeLabel}</div>
+                                  {pos.txid && (
+                                    <div className="text-[8px] text-[#566173]">
+                                      {pos.txid.slice(-8)}
+                                    </div>
+                                  )}
+                                </td>
+                                <td
+                                  className="py-1 px-1.5 font-bold text-[#00E5FF] cursor-pointer hover:underline"
+                                  onClick={() =>
+                                    handleSymbolOrTimeframeChange(pos.pair, activeStrategy.timeframe)
+                                  }
+                                >
+                                  {pos.pair}
+                                </td>
+                                <td className="py-1 px-1.5">
+                                  <span
+                                    className={`px-1 py-0.2 text-[9px] font-bold border ${
+                                      sideLabel === 'LONG'
+                                        ? 'border-[#089981]/50 bg-[#089981]/15 text-[#089981]'
+                                        : 'border-[#F23645]/50 bg-[#F23645]/15 text-[#F23645]'
+                                    }`}
+                                  >
+                                    {sideLabel}
+                                  </span>
+                                </td>
+                                <td className="py-1 px-1.5 text-right">
+                                  <span className="font-semibold text-[#E6EDF3]">{qty}</span>
+                                  <span className="text-[9px] text-[#8B95A5] ml-1">
+                                    (${(pos.cost || qty * pos.entry_price).toFixed(2)})
+                                  </span>
+                                </td>
+                                <td className="py-1 px-1.5 text-right">
+                                  <div className="text-[#E6EDF3]">${formatPrice(pos.entry_price)}</div>
+                                  <div className="text-[10px] text-[#8B95A5]">
+                                    Now: ${formatPrice(pos.current_price)}
+                                  </div>
+                                </td>
+                                <td className="py-1 px-1.5 text-right text-[10px]">
+                                  <div
+                                    className={
+                                      bracket.isBreakEven
+                                        ? 'text-[#00E5FF] font-bold'
+                                        : 'text-[#F59E0B]'
+                                    }
+                                  >
+                                    SL: ${formatPrice(bracket.stopLossPrice)}
+                                    {bracket.isBreakEven ? ' (BE)' : ''}
+                                  </div>
+                                  <div className="text-[#089981]">
+                                    TP: ${formatPrice(bracket.takeProfitPrice)}
+                                  </div>
+                                </td>
+                                <td
+                                  className={`py-1 px-1.5 text-right font-bold ${
+                                    pos.unrealized_pnl >= 0 ? 'text-[#089981]' : 'text-[#F23645]'
+                                  }`}
+                                >
+                                  {pos.unrealized_pnl >= 0 ? '+' : ''}${pos.unrealized_pnl.toFixed(2)}{' '}
+                                  ({pos.unrealized_pnl >= 0 ? '+' : ''}
+                                  {pos.unrealized_pnl_pct.toFixed(2)}%)
+                                </td>
+                                <td className="py-1 px-1.5 text-right">
+                                  <div className="flex items-center justify-end gap-1">
+                                    <button
+                                      type="button"
+                                      disabled={bracket.isBreakEven}
+                                      onClick={() => handleSetPaperBreakEven(pos)}
+                                      title="Stop-Loss auf Einstiegskurs (Break-Even) nachziehen"
+                                      className={`px-1.5 py-0.5 border text-[9px] font-bold uppercase whitespace-nowrap ${
+                                        bracket.isBreakEven
+                                          ? 'border-[#00E5FF]/40 bg-[#00E5FF]/10 text-[#00E5FF] opacity-60'
+                                          : 'border-[#00E5FF]/60 bg-[#00E5FF]/15 hover:bg-[#00E5FF]/30 text-[#00E5FF]'
+                                      }`}
+                                    >
+                                      {bracket.isBreakEven ? 'BE AKTIV' : 'SL → BE'}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      disabled={isSubmittingOrder}
+                                      onClick={() =>
+                                        handleExecutePaperOrder(
+                                          'sell',
+                                          pos.pair,
+                                          Math.max(10, qty * pos.current_price * 1.02),
+                                          pos.current_price
+                                        )
+                                      }
+                                      className="px-1.5 py-0.5 bg-[#F23645]/20 hover:bg-[#F23645]/40 border border-[#F23645]/60 text-[#F23645] text-[9px] font-bold uppercase whitespace-nowrap"
+                                    >
+                                      CLOSE
+                                    </button>
+                                  </div>
+                                </td>
+                              </tr>
+                            );
+                          })}
                         </tbody>
                       </table>
                     </div>
@@ -2350,6 +3095,7 @@ export function App() {
                       type="button"
                       onClick={() => {
                         navigator.clipboard.writeText(editablePineScript);
+                        arcadeSoundEngine.play('UI_FEEDBACK');
                         setPineCopied(true);
                         setTimeout(() => setPineCopied(false), 2000);
                       }}
@@ -2364,13 +3110,14 @@ export function App() {
                     </button>
                     <button
                       type="button"
-                      onClick={() =>
+                      onClick={() => {
+                        arcadeSoundEngine.play('UI_FEEDBACK');
                         exportPineScriptFile(
                           activeStrategy.name,
                           activeStrategy.symbol,
                           editablePineScript
-                        )
-                      }
+                        );
+                      }}
                       className="px-2 py-0.5 bg-[#A855F7]/20 border border-[#A855F7] text-[10px] font-mono text-[#A855F7] font-bold flex items-center gap-1"
                     >
                       <Download className="w-3 h-3" />
@@ -2402,7 +3149,7 @@ export function App() {
                   CHRONICLE OF EVENTS (LIVE)
                 </span>
               </div>
-              <span className="text-[9px] font-mono text-[#8B95A5]">6 QUELLEN</span>
+              <span className="text-[9px] font-mono text-[#8B95A5]">7 QUELLEN</span>
             </div>
 
             <div className="flex-1 overflow-y-auto divide-y divide-[#1B2230]/50 font-mono tabular-nums text-[10px]">
@@ -2541,7 +3288,7 @@ export function App() {
         </aside>
       </div>
 
-      {/* Collapsible Diagnostics & 6-Provider Cascade Drawer */}
+      {/* Collapsible Diagnostics, 24/7 Memory Watchdog & 8-Provider Cascade Drawer */}
       <TerminalDiagnosticsDrawer
         isOpen={isDiagnosticsOpen}
         onClose={() => setIsDiagnosticsOpen(false)}
@@ -2551,6 +3298,8 @@ export function App() {
         backtestResult={backtestResult}
         wsConnected={wsConnected}
         systemLogs={systemLogs}
+        memoryTelemetry={memoryTelemetry}
+        onTriggerGcSweep={handleTriggerGcSweep}
       />
 
       {/* Google Drive Blueprint Modal */}

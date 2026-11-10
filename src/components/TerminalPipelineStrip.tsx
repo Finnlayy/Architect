@@ -18,13 +18,15 @@ interface TerminalPipelineStripProps {
 const PROVIDER_COLORS: Record<DataProviderId, string> = {
   KRAKEN: 'text-[#00E5FF] border-[#00E5FF]/40 bg-[#00E5FF]/10',
   CCXT: 'text-[#10B981] border-[#10B981]/40 bg-[#10B981]/10',
+  MEXC: 'text-[#00C087] border-[#00C087]/50 bg-[#00C087]/15',
+  CMC: 'text-[#3861FB] border-[#3861FB]/50 bg-[#3861FB]/15',
   GAINIUM: 'text-[#A855F7] border-[#A855F7]/40 bg-[#A855F7]/10',
   BINANCE: 'text-[#F59E0B] border-[#F59E0B]/40 bg-[#F59E0B]/10',
   ALPACA: 'text-[#3B82F6] border-[#3B82F6]/40 bg-[#3B82F6]/10',
   ALPHAVANTAGE: 'text-[#EC4899] border-[#EC4899]/40 bg-[#EC4899]/10',
 };
 
-export const TerminalPipelineStrip: React.FC<TerminalPipelineStripProps> = ({
+export const TerminalPipelineStrip: React.FC<TerminalPipelineStripProps> = React.memo(({
   isRunning,
   activeProvider,
   activeSymbol,
@@ -152,4 +154,4 @@ export const TerminalPipelineStrip: React.FC<TerminalPipelineStripProps> = ({
       )}
     </div>
   );
-};
+});

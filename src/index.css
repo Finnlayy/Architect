@@ -122,3 +122,19 @@
   background-size: 200% 200%;
   animation: liquidityWave 6s ease infinite;
 }
+
+@keyframes shrinkScale6s {
+  from {
+    transform: scaleX(1);
+  }
+  to {
+    transform: scaleX(0);
+  }
+}
+
+.animate-toast-6s {
+  transform-origin: left center;
+  animation: shrinkScale6s 6s linear forwards;
+  will-change: transform;
+}
+

@@ -31,6 +31,7 @@ import {
   AuthoritativeBalancePayload,
   AllFourTasksResult,
 } from '../services/krakenCliProxyRegistry';
+import { arcadeSoundEngine } from '../services/arcadeSoundEngine';
 
 interface KrakenFourTasksBarProps {
   onSyncPortfolio?: () => void;
@@ -84,10 +85,12 @@ export const KrakenFourTasksBar: React.FC<KrakenFourTasksBarProps> = ({
     setIsLoading(true);
     try {
       const res = await togglePaperBridge();
+      arcadeSoundEngine.play('UI_FEEDBACK');
       setActionMessage(res.message);
       await loadAllData();
       if (onSyncPortfolio) onSyncPortfolio();
     } catch (err: any) {
+      arcadeSoundEngine.play('WARNING_MEME');
       setActionMessage(`Error: ${err.message}`);
     } finally {
       setIsLoading(false);
@@ -99,10 +102,12 @@ export const KrakenFourTasksBar: React.FC<KrakenFourTasksBarProps> = ({
     setIsLoading(true);
     try {
       const res = await triggerCleanupHomemadeSoT();
+      arcadeSoundEngine.play('UI_FEEDBACK');
       setActionMessage(res.message);
       await loadAllData();
       if (onSyncPortfolio) onSyncPortfolio();
     } catch (err: any) {
+      arcadeSoundEngine.play('WARNING_MEME');
       setActionMessage(`Error: ${err.message}`);
     } finally {
       setIsLoading(false);
@@ -115,10 +120,12 @@ export const KrakenFourTasksBar: React.FC<KrakenFourTasksBarProps> = ({
     try {
       const args = proxyTestArgs.trim() ? proxyTestArgs.trim().split(/\s+/) : [];
       const res = await executeViaProxyRegistry(proxyTestCmd, args, { output: 'json' }, 'USER_BAR_TEST');
+      arcadeSoundEngine.play('ORDER_FILL');
       setProxyTestOutput(res);
       await loadAllData();
       if (onSyncPortfolio) onSyncPortfolio();
     } catch (err: any) {
+      arcadeSoundEngine.play('WARNING_MEME');
       setProxyTestOutput({ error: err.message });
     } finally {
       setIsLoading(false);
@@ -130,10 +137,12 @@ export const KrakenFourTasksBar: React.FC<KrakenFourTasksBarProps> = ({
     setIsLoading(true);
     try {
       const res = await migrateBalanceToCli(targetMode);
+      arcadeSoundEngine.play(targetMode === 'live' ? 'WARNING_MEME' : 'UI_FEEDBACK');
       setActionMessage(`Migrated balance source to Kraken CLI (${res.activeMode.toUpperCase()})`);
       await loadAllData();
       if (onSyncPortfolio) onSyncPortfolio();
     } catch (err: any) {
+      arcadeSoundEngine.play('WARNING_MEME');
       setActionMessage(`Error: ${err.message}`);
     } finally {
       setIsLoading(false);
@@ -145,12 +154,14 @@ export const KrakenFourTasksBar: React.FC<KrakenFourTasksBarProps> = ({
     setIsLoading(true);
     try {
       const res = await executeAllFourTasks();
+      arcadeSoundEngine.play('SUCCESS_FANFARE');
       setAllTasksResult(res);
       setActiveModal('all');
       setActionMessage(res.message);
       await loadAllData();
       if (onSyncPortfolio) onSyncPortfolio();
     } catch (err: any) {
+      arcadeSoundEngine.play('CRITICAL_ALARM');
       setActionMessage(`Error: ${err.message}`);
     } finally {
       setIsLoading(false);
