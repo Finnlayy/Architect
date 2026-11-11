@@ -36,6 +36,8 @@ import {
   savePersistentStrategyStore,
   MAX_CONCURRENT_TRADES_HARD_CAP,
   DEFAULT_PAPER_INITIAL_CAPITAL,
+  getCmcIntelligenceData,
+  refreshCmcIntelligenceData,
 } from './src/server/terminalEngine.ts';
 import { TimeframeId, StrategyDefinition } from './src/types/terminal.ts';
 
@@ -1097,6 +1099,30 @@ app.post('/api/v1/swarm/spawn-from-history', (req: Request, res: Response) => {
     newBotId,
     bot: newBot,
   });
+});
+
+// 3b. CoinMarketCap (CMC) Market Intelligence, Ranked Screener, DEX On-Chain & Exchange Liquidity
+app.get('/api/cmc/intelligence', async (req: Request, res: Response) => {
+  try {
+    const force = req.query.force === '1' || req.query.force === 'true';
+    const payload = await getCmcIntelligenceData(getKrakenMarketPrice, force);
+    res.json(payload);
+  } catch (err: any) {
+    res.status(500).json({
+      error: err.message || 'CoinMarketCap Intelligence Abruf fehlgeschlagen.',
+    });
+  }
+});
+
+app.post('/api/cmc/refresh', async (req: Request, res: Response) => {
+  try {
+    const payload = await refreshCmcIntelligenceData(getKrakenMarketPrice);
+    res.json(payload);
+  } catch (err: any) {
+    res.status(500).json({
+      error: err.message || 'CoinMarketCap Refresh fehlgeschlagen.',
+    });
+  }
 });
 
 // =========================================================================
