@@ -12,6 +12,14 @@ import {
   OHLCVCandle,
   ProviderAttemptTrace,
   CmcIntelligencePayload,
+  VoiceCommandBinding,
+  PionexUniversePayload,
+  FinanceNewsPayload,
+  AgentConvergenceDecision,
+  AgentConvergenceState,
+  AgentConvergenceTrigger,
+  AgentExecutionConfig,
+  AgentVote,
 } from './types/terminal';
 import {
   INITIAL_CLIENT_STRATEGIES,
@@ -27,33 +35,56 @@ import {
   triggerEmergencyFlatten,
   fetchCmcIntelligence,
   refreshCmcIntelligence,
+  fetchPionexUniverse,
+  scanPionexUniverseNow,
+  fetchFinanceNews,
   exportTradesToCsv,
   exportStrategyAndResultToJson,
   exportPineScriptFile,
   fetchSystemMemoryStatus,
   triggerSystemGcSweep,
   SystemMemoryTelemetry,
+  fetchAgentConvergenceState,
+  updateAgentConvergenceConfig,
+  evaluateAgentConvergenceNow,
 } from './services/terminalClient';
 import {
   fetchPaperBridgeStatus,
   executePaperBridgeOrder,
   paperReset,
+  syncStrategyPaperBookCapital,
+  saveStrategyPaperBracket,
   PaperBridgeStatus,
+  PaperBookBracketDto,
 } from './services/krakenCliProxyRegistry';
 import { useKrakenStream } from './hooks/useKrakenStream';
 import { TerminalPipelineStrip } from './components/TerminalPipelineStrip';
 import { TerminalWorkspaceChart, ChartOpenPaperPosition } from './components/TerminalWorkspaceChart';
 import { TerminalDiagnosticsDrawer } from './components/TerminalDiagnosticsDrawer';
 import { TerminalCmcIntelligenceTab } from './components/TerminalCmcIntelligenceTab';
+import { TerminalPionexUniverseTab } from './components/TerminalPionexUniverseTab';
 import { EquityDrawdownHeatmap } from './components/EquityDrawdownHeatmap';
 import { DriveBlueprintModal } from './components/DriveBlueprintModal';
 import { ArcadeAudioControl } from './components/ArcadeAudioControl';
+import { LiveCommentatorDesk } from './components/LiveCommentatorDesk';
+import { VoiceTeachModal } from './components/VoiceTeachModal';
+import { BroadcastStreamFullscreen } from './components/BroadcastStreamFullscreen';
+import { AgentConvergencePanel } from './components/AgentConvergencePanel';
 import {
   TerminalNotificationBell,
   LiveEventToastStack,
   TerminalNotificationItem,
 } from './components/TerminalNotificationCenter';
 import { arcadeSoundEngine, SoundEventType } from './services/arcadeSoundEngine';
+import {
+  voiceCommentatorService,
+  VoiceCommentatorSnapshot,
+} from './services/voiceCommentatorService';
+import {
+  voiceCommandListener,
+  VoiceListenerSnapshot,
+} from './services/voiceCommandListener';
+import { loadVoiceTeachData } from './services/voiceTeachStore';
 import { initAuth, googleSignIn, logout, getAccessToken } from './services/firebase';
 import { searchDriveFiles, fetchFileContent } from './services/googleDrive';
 import { User } from 'firebase/auth';
@@ -85,6 +116,9 @@ import {
   RotateCcw,
   Globe,
   Flame,
+  Volume2,
+  Radar,
+  Bot,
 } from 'lucide-react';
 
 const PROVIDER_BADGE_STYLES: Record<DataProviderId, string> = {
@@ -92,15 +126,18 @@ const PROVIDER_BADGE_STYLES: Record<DataProviderId, string> = {
   CCXT: 'text-[#10B981] border-[#10B981]/40 bg-[#10B981]/10',
   MEXC: 'text-[#00C087] border-[#00C087]/50 bg-[#00C087]/15',
   CMC: 'text-[#60A5FA] border-[#3861FB]/50 bg-[#3861FB]/15',
+  PIONEX: 'text-[#F97316] border-[#F97316]/50 bg-[#F97316]/15',
   GAINIUM: 'text-[#A855F7] border-[#A855F7]/40 bg-[#A855F7]/10',
   BINANCE: 'text-[#F59E0B] border-[#F59E0B]/40 bg-[#F59E0B]/10',
   ALPACA: 'text-[#3B82F6] border-[#3B82F6]/40 bg-[#3B82F6]/10',
   ALPHAVANTAGE: 'text-[#EC4899] border-[#EC4899]/40 bg-[#EC4899]/10',
+  YAHOO_FINANCE: 'text-[#C084FC] border-[#A855F7]/50 bg-[#A855F7]/15',
+  MSN_FINANCE: 'text-[#38BDF8] border-[#38BDF8]/50 bg-[#38BDF8]/15',
 };
 
 const TIMEFRAMES: TimeframeId[] = ['1m', '5m', '15m', '1h', '4h', '1d'];
 
-type BottomDockTab = 'TRADES' | 'CMC' | 'METRICS' | 'EXECUTION' | 'PINE';
+type BottomDockTab = 'TRADES' | 'AGENTS' | 'CMC' | 'PIONEX' | 'METRICS' | 'EXECUTION' | 'PINE';
 type LeftPaneMode = 'CONFIG' | 'SCREENER';
 
 export function App() {
@@ -149,15 +186,19 @@ export function App() {
   const [isScreenerRefreshing, setIsScreenerRefreshing] = useState<boolean>(false);
   const [cmcData, setCmcData] = useState<CmcIntelligencePayload | null>(null);
   const [isCmcLoading, setIsCmcLoading] = useState<boolean>(false);
+  const [pionexData, setPionexData] = useState<PionexUniversePayload | null>(null);
+  const [isPionexLoading, setIsPionexLoading] = useState<boolean>(false);
+  const [newsData, setNewsData] = useState<FinanceNewsPayload | null>(null);
+  const [isNewsLoading, setIsNewsLoading] = useState<boolean>(false);
 
-  // 5. Kraken Paper Bridge ($1,000.00 Account) & Live WebSocket Stream
+  // 5. Kraken Paper Bridge (Isolated Paper Book per Strategy, $100.00 Default) & Live WebSocket Stream
   const [paperBridge, setPaperBridge] = useState<PaperBridgeStatus | null>(null);
   const [executionEnvironment, setExecutionEnvironment] = useState<'PAPER' | 'LIVE_ARMED'>('PAPER');
   const [liveConfirmStep, setLiveConfirmStep] = useState<boolean>(false);
-  const [orderSizeUsd, setOrderSizeUsd] = useState<number>(50);
+  const [orderSizeUsd, setOrderSizeUsd] = useState<number>(25);
   const [isSubmittingOrder, setIsSubmittingOrder] = useState<boolean>(false);
 
-  const { markets: wsMarkets, streamStatus } = useKrakenStream();
+  const { markets: wsMarkets, streamStatus, isRealKrakenData } = useKrakenStream();
   const wsConnected = streamStatus === 'LIVE';
 
   // 6. UI Workspace Navigation State
@@ -178,10 +219,12 @@ export function App() {
   const [isDriveLoading, setIsDriveLoading] = useState<boolean>(false);
   const [driveError, setDriveError] = useState<string | null>(null);
   const [systemLogs, setSystemLogs] = useState<string[]>([
-    `[${new Date().toLocaleTimeString('de-DE')}] OMEGA NIO Terminal initialisiert · Paper Account Basis: $1,000.00 · Max Concurrent Trades Cap: 20 · 24/7 RAM Watchdog aktiv`,
+    `[${new Date().toLocaleTimeString('de-DE')}] OMEGA NIO Terminal initialisiert · Isolierte Paper Books ($100.00 Basis / Strategie · Redis Data Lake) · Max Concurrent Trades Cap: 20`,
   ]);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const activeStrategyRef = useRef<StrategyDefinition>(activeStrategy);
+  activeStrategyRef.current = activeStrategy;
   const knownAnomaliesRef = useRef<Set<string>>(new Set());
   const initialScreenerSeededRef = useRef<boolean>(false);
   const isPollingRef = useRef<boolean>(false);
@@ -195,22 +238,40 @@ export function App() {
   const [notifications, setNotifications] = useState<TerminalNotificationItem[]>([]);
   const [activeToasts, setActiveToasts] = useState<TerminalNotificationItem[]>([]);
 
-  // 8. Auto-SL/TP Risk Brackets for Open Paper Positions
-  const [paperBrackets, setPaperBrackets] = useState<
-    Record<
-      string,
-      {
-        entryPrice: number;
-        stopLossPrice: number;
-        takeProfitPrice: number;
-        isBreakEven: boolean;
-        side: 'LONG' | 'SHORT';
-      }
-    >
-  >(() => {
+  // 7b. Live Voice-Out Commentator, Teachable Voice Commands & Fullscreen Stream State
+  const [isBroadcastFullscreen, setIsBroadcastFullscreen] = useState<boolean>(false);
+  const [isVoiceTeachModalOpen, setIsVoiceTeachModalOpen] = useState<boolean>(false);
+  const [voiceSnap, setVoiceSnap] = useState<VoiceCommentatorSnapshot>(() =>
+    voiceCommentatorService.getSnapshot()
+  );
+  const [listenerSnap, setListenerSnap] = useState<VoiceListenerSnapshot>(() =>
+    voiceCommandListener.getSnapshot()
+  );
+  const [voiceCommands, setVoiceCommands] = useState<VoiceCommandBinding[]>(
+    () => loadVoiceTeachData().commands
+  );
+  const isBroadcastFullscreenRef = useRef<boolean>(false);
+  isBroadcastFullscreenRef.current = isBroadcastFullscreen;
+  const cmcDataRef = useRef<CmcIntelligencePayload | null>(null);
+  cmcDataRef.current = cmcData;
+  const screenerStatusRef = useRef<ScreenerScheduleStatus | null>(null);
+  screenerStatusRef.current = screenerStatus;
+
+  // 7c. Hybrid 5-Agent Market Convergence & Auto-Execution State
+  const [agentConvergenceState, setAgentConvergenceState] =
+    useState<AgentConvergenceState | null>(null);
+  const [isEvaluatingConvergence, setIsEvaluatingConvergence] = useState<boolean>(false);
+  const [convergenceError, setConvergenceError] = useState<string | null>(null);
+  const agentEvalInflightRef = useRef<boolean>(false);
+  const lastAgentEvalAtRef = useRef<number>(0);
+  const lastAgentTriggerKeyRef = useRef<string>('');
+  const agentSeededRef = useRef<boolean>(false);
+
+  // 8. Auto-SL/TP Risk Brackets scoped per Strategy Book (`strategyId::PAIR`)
+  const [paperBrackets, setPaperBrackets] = useState<Record<string, PaperBookBracketDto>>(() => {
     if (typeof window === 'undefined') return {};
     try {
-      const raw = window.localStorage.getItem('omega_paper_brackets_v1');
+      const raw = window.localStorage.getItem('omega_paper_brackets_v2');
       return raw ? JSON.parse(raw) : {};
     } catch {
       return {};
@@ -228,6 +289,7 @@ export function App() {
 
   const pushNotification = useCallback(
     (category: SoundEventType, title: string, detail: string, symbol?: string) => {
+      if (isBroadcastFullscreenRef.current) return;
       const now = Date.now();
       const id = `notif_${now}_${Math.random().toString(36).slice(2, 6)}`;
       const item: TerminalNotificationItem = {
@@ -253,6 +315,20 @@ export function App() {
   );
 
   useEffect(() => {
+    const unsubVoice = voiceCommentatorService.subscribe((snap) => setVoiceSnap(snap));
+    const unsubListener = voiceCommandListener.subscribe((snap) => setListenerSnap(snap));
+    return () => {
+      unsubVoice();
+      unsubListener();
+      voiceCommandListener.stop();
+    };
+  }, []);
+
+  useEffect(() => {
+    voiceCommandListener.setCommands(voiceCommands);
+  }, [voiceCommands]);
+
+  useEffect(() => {
     const timersMap = toastTimersRef.current;
     return () => {
       timersMap.forEach((t) => window.clearTimeout(t));
@@ -263,8 +339,8 @@ export function App() {
   useEffect(() => {
     if (typeof window === 'undefined') return;
     try {
-      const entries = Object.entries(paperBrackets).slice(-25);
-      window.localStorage.setItem('omega_paper_brackets_v1', JSON.stringify(Object.fromEntries(entries)));
+      const entries = Object.entries(paperBrackets).slice(-80);
+      window.localStorage.setItem('omega_paper_brackets_v2', JSON.stringify(Object.fromEntries(entries)));
     } catch {
       // ignore storage errors
     }
@@ -341,7 +417,7 @@ export function App() {
         id: `drive-${file.id.slice(0, 8)}`,
         name: file.name.replace(/\.[^/.]+$/, ''),
         idea: content.slice(0, 180).replace(/\s+/g, ' ').trim() || `Drive Blueprint: ${file.name}`,
-        initialCapital: 1000,
+        initialCapital: 100,
         maxConcurrentTrades: 20,
         updatedAt: Date.now(),
       };
@@ -374,18 +450,36 @@ export function App() {
     });
   }, [activeStrategy.id, strategies, backtestResult]);
 
-  // Initial Load: Fetch strategies, scheduled screener, CMC intelligence, paper bridge ($1,000), memory watchdog, and run initial backtest
+  // Initial Load: Fetch strategies, scheduled screener, CMC intelligence, isolated paper bridge, memory watchdog, and run initial backtest
   useEffect(() => {
     let mounted = true;
     async function bootstrap() {
       try {
-        const [storeData, screenerData, bridgeData, cmcPayload, memData] = await Promise.all([
-          fetchStrategyStore().catch(() => null),
-          fetchScreenerSchedule().catch(() => null),
-          fetchPaperBridgeStatus().catch(() => null),
-          fetchCmcIntelligence().catch(() => null),
-          fetchSystemMemoryStatus().catch(() => null),
-        ]);
+        const [storeData, screenerData, cmcPayload, memData, pionexPayload, newsPayload, convPayload] =
+          await Promise.all([
+            fetchStrategyStore().catch(() => null),
+            fetchScreenerSchedule().catch(() => null),
+            fetchCmcIntelligence().catch(() => null),
+            fetchSystemMemoryStatus().catch(() => null),
+            fetchPionexUniverse().catch(() => null),
+            fetchFinanceNews().catch(() => null),
+            fetchAgentConvergenceState().catch(() => null),
+          ]);
+        if (!mounted) return;
+
+        let targetStrat = activeStrategy;
+        if (storeData && storeData.strategies?.length) {
+          setStrategies(storeData.strategies);
+          targetStrat =
+            storeData.strategies.find((s) => s.id === storeData.activeStrategyId) ||
+            storeData.strategies[0];
+          setActiveStrategy(targetStrat);
+        }
+
+        const bridgeData = await fetchPaperBridgeStatus(
+          targetStrat.id,
+          targetStrat.initialCapital
+        ).catch(() => null);
         if (!mounted) return;
 
         if (bridgeData) {
@@ -395,6 +489,7 @@ export function App() {
         }
         if (screenerData) {
           setScreenerStatus(screenerData);
+          voiceCommentatorService.seedRecentChronicleContext(screenerData.chronicle || []);
         }
         if (cmcPayload) {
           setCmcData(cmcPayload);
@@ -402,12 +497,14 @@ export function App() {
         if (memData) {
           setMemoryTelemetry(memData);
         }
-        if (storeData && storeData.strategies?.length) {
-          setStrategies(storeData.strategies);
-          const target =
-            storeData.strategies.find((s) => s.id === storeData.activeStrategyId) ||
-            storeData.strategies[0];
-          setActiveStrategy(target);
+        if (pionexPayload) {
+          setPionexData(pionexPayload);
+        }
+        if (newsPayload) {
+          setNewsData(newsPayload);
+        }
+        if (convPayload) {
+          setAgentConvergenceState(convPayload);
         }
       } catch (err: any) {
         appendLog(`Bootstrap-Hinweis: ${err.message}`);
@@ -418,7 +515,27 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Periodic polling of the Automated Scheduled Screener, CoinMarketCap, Paper Account Ledger & 24/7 Memory Watchdog
+  // Immediately load the isolated Paper Book when switching strategies
+  useEffect(() => {
+    let active = true;
+    lastRealizedPnlRef.current = null;
+    lastExecutionTxidRef.current = null;
+    fetchPaperBridgeStatus(activeStrategy.id, activeStrategy.initialCapital)
+      .then((bridgeData) => {
+        if (!active || !bridgeData) return;
+        setPaperBridge(bridgeData);
+        lastRealizedPnlRef.current = bridgeData.paperLedger?.realized_pnl ?? null;
+        lastExecutionTxidRef.current = bridgeData.lastExecution?.txid ?? null;
+      })
+      .catch(() => {
+        // ignore transient error
+      });
+    return () => {
+      active = false;
+    };
+  }, [activeStrategy.id]);
+
+  // Periodic polling of the Automated Scheduled Screener, CoinMarketCap, Strategy Paper Book & 24/7 Memory Watchdog
   // Guarded with an in-flight lock (isPollingRef) so overlapping requests never accumulate over 24/7 operation.
   useEffect(() => {
     const timer = setInterval(async () => {
@@ -426,14 +543,18 @@ export function App() {
       isPollingRef.current = true;
       pollCycleCountRef.current += 1;
       const shouldPollCmc = pollCycleCountRef.current % 3 === 0;
+      const currentStrat = activeStrategyRef.current;
 
       try {
-        const [screenerData, bridgeData, memData, cmcPayload] = await Promise.all([
-          fetchScreenerSchedule().catch(() => null),
-          fetchPaperBridgeStatus().catch(() => null),
-          fetchSystemMemoryStatus().catch(() => null),
-          shouldPollCmc ? fetchCmcIntelligence().catch(() => null) : Promise.resolve(null),
-        ]);
+        const [screenerData, bridgeData, memData, cmcPayload, pionexPayload, newsPayload] =
+          await Promise.all([
+            fetchScreenerSchedule().catch(() => null),
+            fetchPaperBridgeStatus(currentStrat.id, currentStrat.initialCapital).catch(() => null),
+            fetchSystemMemoryStatus().catch(() => null),
+            shouldPollCmc ? fetchCmcIntelligence().catch(() => null) : Promise.resolve(null),
+            shouldPollCmc ? fetchPionexUniverse().catch(() => null) : Promise.resolve(null),
+            shouldPollCmc ? fetchFinanceNews().catch(() => null) : Promise.resolve(null),
+          ]);
         if (screenerData) {
           setScreenerStatus(screenerData);
           const currentAnomalies = (screenerData.tickers || []).filter(
@@ -470,8 +591,22 @@ export function App() {
               );
             }
           }
+
+          // Feed new Chronicle of Events into Live Voice Commentator (strictly excludes Paper Fills & Backtests)
+          if (
+            voiceCommentatorService.isVoiceModeEnabled() &&
+            screenerData.chronicle &&
+            screenerData.chronicle.length > 0
+          ) {
+            const latestChronicle = screenerData.chronicle[0];
+            voiceCommentatorService.enqueueChronicleEvent(
+              latestChronicle,
+              cmcDataRef.current,
+              false
+            );
+          }
         }
-        if (bridgeData) {
+        if (bridgeData && (!bridgeData.strategyId || bridgeData.strategyId === activeStrategyRef.current.id || bridgeData.strategyId === activeStrategyRef.current.id.replace(/[^a-zA-Z0-9_-]/g, '_'))) {
           setPaperBridge(bridgeData);
           if (bridgeData.paperLedger && lastRealizedPnlRef.current !== null) {
             const currentRealized = bridgeData.paperLedger.realized_pnl;
@@ -481,7 +616,7 @@ export function App() {
               pushNotification(
                 'TAKE_PROFIT',
                 `Take-Profit Realisiert (+$${diff.toFixed(2)})`,
-                `Realisierter Gewinn im Paper-Ledger verbucht · Gesamt Realized PnL: $${currentRealized.toFixed(2)}`,
+                `Realisierter Gewinn im Paper-Book "${currentStrat.name}" verbucht · Gesamt Realized PnL: $${currentRealized.toFixed(2)}`,
                 bridgeData.lastExecution?.symbol
               );
             } else if (diff < -0.01) {
@@ -489,7 +624,7 @@ export function App() {
               pushNotification(
                 'STOP_LOSS',
                 `Stop-Loss / Verlust Realisiert (-$${Math.abs(diff).toFixed(2)})`,
-                `Risikobegrenzung im Paper-Ledger verbucht · Gesamt Realized PnL: $${currentRealized.toFixed(2)}`,
+                `Risikobegrenzung im Paper-Book "${currentStrat.name}" verbucht · Gesamt Realized PnL: $${currentRealized.toFixed(2)}`,
                 bridgeData.lastExecution?.symbol
               );
             }
@@ -503,7 +638,7 @@ export function App() {
             pushNotification(
               'ORDER_FILL',
               `Order-Fill: ${bridgeData.lastExecution.side.toUpperCase()} ${bridgeData.lastExecution.symbol}`,
-              `Ausgeführt @ $${ bridgeData.lastExecution.price.toFixed(2) } (${bridgeData.lastExecution.txid.slice(-8)})`,
+              `Ausgeführt @ $${bridgeData.lastExecution.price.toFixed(2)} (${bridgeData.lastExecution.txid.slice(-8)})`,
               bridgeData.lastExecution.symbol
             );
           }
@@ -515,6 +650,26 @@ export function App() {
         }
         if (cmcPayload) {
           setCmcData(cmcPayload);
+          if (voiceCommentatorService.isVoiceModeEnabled() && cmcPayload.signals.length > 0) {
+            voiceCommentatorService.enqueueCommunitySignal(
+              cmcPayload.signals[0],
+              cmcPayload,
+              false
+            );
+          }
+        }
+        if (pionexPayload) {
+          setPionexData(pionexPayload);
+        }
+        if (newsPayload) {
+          setNewsData(newsPayload);
+          if (voiceCommentatorService.isVoiceModeEnabled() && newsPayload.items.length > 0) {
+            voiceCommentatorService.enqueueFinanceNews(
+              newsPayload.items[0],
+              cmcDataRef.current,
+              false
+            );
+          }
         }
       } catch {
         // Silent background refresh
@@ -540,6 +695,186 @@ export function App() {
     }
   }, [appendLog]);
 
+  // Evaluate 5-Agent Convergence over Pure Teleprompter Feed + Risk-Capped Paper Auto-Execution
+  const handleRunAgentConvergence = useCallback(
+    async (
+      trigger: AgentConvergenceTrigger,
+      scriptOverride?: string,
+      symbolOverride?: string
+    ) => {
+      if (agentEvalInflightRef.current) return;
+      agentEvalInflightRef.current = true;
+      setIsEvaluatingConvergence(true);
+      setConvergenceError(null);
+
+      const currentStrat = activeStrategyRef.current;
+      const targetSym = (symbolOverride || currentStrat.symbol || 'BTC/USD').trim();
+      const latestVoice = voiceCommentatorService.getSnapshot();
+      const fallbackScript =
+        scriptOverride ||
+        latestVoice.currentItem?.spokenText ||
+        latestVoice.currentItem?.headline ||
+        screenerStatusRef.current?.chronicle?.[0]?.headline ||
+        `Echtzeit-Überwachung auf ${targetSym}`;
+
+      try {
+        const res = await evaluateAgentConvergenceNow({
+          activeSymbol: targetSym,
+          teleprompterScript: fallbackScript,
+          trigger,
+          strategyId: currentStrat.id,
+          initialCapital: currentStrat.initialCapital,
+        });
+        lastAgentEvalAtRef.current = Date.now();
+        setAgentConvergenceState(res.state);
+
+        const dec = res.decision;
+        if (dec.executionRecord?.status === 'EXECUTED') {
+          arcadeSoundEngine.play('ORDER_FILL', { isBackground: true });
+          const ex = dec.executionRecord;
+          setPaperBrackets((prev) => ({
+            ...prev,
+            [`${currentStrat.id}::${ex.symbol}`]: {
+              strategyId: currentStrat.id,
+              pair: ex.symbol,
+              stopLossPrice: ex.stopLoss,
+              takeProfitPrice: ex.takeProfit,
+              isBreakEven: false,
+              updatedAt: Date.now(),
+            },
+          }));
+          const refreshedBridge = await fetchPaperBridgeStatus(
+            currentStrat.id,
+            currentStrat.initialCapital
+          ).catch(() => null);
+          if (refreshedBridge) {
+            setPaperBridge(refreshedBridge);
+            lastExecutionTxidRef.current = refreshedBridge.lastExecution?.txid ?? null;
+          }
+          pushNotification(
+            'ORDER_FILL',
+            `5-Agent Auto-Paper Fill: ${ex.direction} ${ex.symbol}`,
+            `Konvergenz ${dec.convergencePct}% · Entry $${ex.price.toFixed(2)} · SL $${ex.stopLoss.toFixed(2)} · TP $${ex.takeProfit.toFixed(2)}`,
+            ex.symbol
+          );
+          appendLog(
+            `[5-AGENTEN AUTO-EXECUTION] ${ex.direction} ${ex.symbol} @ $${ex.price.toFixed(2)} ($${ex.costUsd.toFixed(2)}) · Konvergenz ${dec.convergencePct}%`
+          );
+        } else if (dec.riskCorsetVetoed) {
+          arcadeSoundEngine.play('STOP_LOSS', { isBackground: true });
+          appendLog(
+            `[5-AGENTEN VETO] ${dec.context.symbol}: ${dec.vetoReason || 'Risiko-Korsett blockiert.'}`
+          );
+        } else if (dec.tradeSetup) {
+          arcadeSoundEngine.play('TAKE_PROFIT', { isBackground: true });
+          appendLog(
+            `[5-AGENTEN KONVERGENZ ${dec.convergencePct}%] ${dec.tradeSetup.symbol} ${dec.tradeSetup.direction} · Entry ${dec.tradeSetup.entryStr} · SL ${dec.tradeSetup.stopLossStr} · TP ${dec.tradeSetup.takeProfitStr}`
+          );
+        }
+
+        if (
+          res.state.config.autoSpeakDebate &&
+          (isBroadcastFullscreenRef.current || voiceCommentatorService.isVoiceModeEnabled())
+        ) {
+          voiceCommentatorService.announceAgentConvergenceDebate(
+            dec,
+            trigger === 'MANUAL'
+          );
+        }
+      } catch (err: any) {
+        setConvergenceError(err?.message || '5-Agenten Konvergenz-Fehler.');
+      } finally {
+        agentEvalInflightRef.current = false;
+        setIsEvaluatingConvergence(false);
+      }
+    },
+    [appendLog, pushNotification]
+  );
+
+  const handleUpdateAgentConfig = useCallback(
+    async (patch: Partial<AgentExecutionConfig>) => {
+      try {
+        const res = await updateAgentConvergenceConfig(patch);
+        setAgentConvergenceState(res.state);
+        arcadeSoundEngine.play('UI_FEEDBACK');
+      } catch (err: any) {
+        setConvergenceError(err?.message || 'Konfiguration konnte nicht gespeichert werden.');
+      }
+    },
+    []
+  );
+
+  // Event-triggered pipeline watcher: fires when Teleprompter script updates or RVOL/Macro event arrives
+  // Strictly ignores AGENT_CONVERGENCE / AGENT_PERSONA / CUSTOM_SPEAK items to prevent feedback loops.
+  useEffect(() => {
+    const activeVoiceItem = voiceSnap.currentItem;
+    const latestChronicle = screenerStatus?.chronicle?.[0];
+    const latestNews = newsData?.items?.[0];
+
+    let candidateKey = '';
+    let trigger: AgentConvergenceTrigger | null = null;
+    let scriptText = '';
+    let sym: string | undefined;
+
+    if (
+      activeVoiceItem &&
+      activeVoiceItem.eventType !== 'AGENT_CONVERGENCE' &&
+      activeVoiceItem.eventType !== 'AGENT_PERSONA' &&
+      activeVoiceItem.eventType !== 'CUSTOM_SPEAK'
+    ) {
+      candidateKey = `TP:${activeVoiceItem.id}`;
+      trigger = 'TELEPROMPTER';
+      scriptText = activeVoiceItem.spokenText || activeVoiceItem.headline;
+      if (
+        activeVoiceItem.symbol &&
+        !['DESK', 'LIVE Q&A', 'GLOBAL', 'MACRO', 'CRYPTO'].includes(
+          activeVoiceItem.symbol.toUpperCase()
+        )
+      ) {
+        sym = activeVoiceItem.symbol;
+      }
+    } else if (
+      latestChronicle &&
+      /RVOL|BREAKOUT|SPIKE|ANOMAL|SURGE|WHALE/i.test(
+        `${latestChronicle.headline} ${latestChronicle.detail}`
+      )
+    ) {
+      candidateKey = `CHR:${latestChronicle.id}`;
+      trigger = 'RVOL_SPIKE';
+      scriptText = `${latestChronicle.symbol}: ${latestChronicle.headline} — ${latestChronicle.detail}`;
+      sym = latestChronicle.symbol;
+    } else if (latestNews) {
+      candidateKey = `NWS:${latestNews.id}`;
+      trigger = 'MACRO_EVENT';
+      scriptText = `${latestNews.symbol}: ${latestNews.title}. ${latestNews.summary}`;
+      if (
+        latestNews.symbol &&
+        !['MACRO', 'GLOBAL', 'MARKET', 'CRYPTO'].includes(latestNews.symbol.toUpperCase())
+      ) {
+        sym = latestNews.symbol;
+      }
+    }
+
+    if (!candidateKey || !trigger) return;
+
+    if (!agentSeededRef.current) {
+      agentSeededRef.current = true;
+      lastAgentTriggerKeyRef.current = candidateKey;
+      return;
+    }
+
+    if (candidateKey === lastAgentTriggerKeyRef.current) return;
+    if (Date.now() - lastAgentEvalAtRef.current < 20_000) return;
+
+    lastAgentTriggerKeyRef.current = candidateKey;
+    void handleRunAgentConvergence(trigger, scriptText, sym);
+  }, [
+    voiceSnap.currentItem,
+    screenerStatus?.chronicle,
+    newsData?.items,
+    handleRunAgentConvergence,
+  ]);
+
   const handleRefreshCmc = async () => {
     if (isCmcLoading) return;
     setIsCmcLoading(true);
@@ -558,13 +893,49 @@ export function App() {
     }
   };
 
+  const handleScanPionex = async () => {
+    if (isPionexLoading) return;
+    setIsPionexLoading(true);
+    try {
+      const payload = await scanPionexUniverseNow();
+      setPionexData(payload);
+      arcadeSoundEngine.play('UI_FEEDBACK');
+      appendLog(
+        `Pionex USDT-Universum gescannt: ${payload.totalUsdtMarkets} Märkte (${payload.spotCount} Spot / ${payload.perpCount} Perp, ${payload.anomaliesCount} Anomalien).`
+      );
+    } catch (err: any) {
+      arcadeSoundEngine.play('WARNING_MEME');
+      setErrorBanner(`Pionex-Scan Fehler: ${err.message}`);
+    } finally {
+      setIsPionexLoading(false);
+    }
+  };
+
+  const handleRefreshFinanceNews = async () => {
+    if (isNewsLoading) return;
+    setIsNewsLoading(true);
+    try {
+      const payload = await fetchFinanceNews(true);
+      setNewsData(payload);
+      arcadeSoundEngine.play('UI_FEEDBACK');
+      appendLog(
+        `Yahoo & MSN Finance News aktualisiert: ${payload.yahooCount} Yahoo, ${payload.msnCount} MSN Artikel.`
+      );
+    } catch (err: any) {
+      arcadeSoundEngine.play('WARNING_MEME');
+      setErrorBanner(`News-Refresh Fehler: ${err.message}`);
+    } finally {
+      setIsNewsLoading(false);
+    }
+  };
+
   // Input Validation for Strategy Parameters
   const validateStrategyInput = (strat: StrategyDefinition): string | null => {
     if (!strat.symbol || strat.symbol.trim().length < 2) {
       return 'Bitte ein gültiges Handelssymbol eingeben (z. B. BTC/USD, PEPEUSDT.P, NVDA, EUR/USD).';
     }
     if (isNaN(strat.initialCapital) || strat.initialCapital < 10 || strat.initialCapital > 10000000) {
-      return 'Startkapital muss zwischen $10.00 und $10,000,000.00 liegen (Standard Paper-Konto: $1,000.00).';
+      return 'Startkapital muss zwischen $10.00 und $10,000,000.00 liegen (Standard Paper Book: $100.00).';
     }
     if (isNaN(strat.riskPerTradePct) || strat.riskPerTradePct <= 0 || strat.riskPerTradePct > 25) {
       return 'Risiko pro Trade muss zwischen 0.1% und 25.0% liegen.';
@@ -586,15 +957,25 @@ export function App() {
   };
 
   // Run Backtest (with Double-Start Lock & AbortController Cancel)
-  const handleRunBacktest = async (strategyOverride?: StrategyDefinition) => {
-    if (isJobRunning) return;
-    const targetStrat = strategyOverride || activeStrategy;
+  const handleRunBacktest = async (
+    strategyOverride?: StrategyDefinition,
+    options?: { silent?: boolean; forceRestart?: boolean }
+  ) => {
+    if (options?.forceRestart && abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    } else if (isJobRunning) {
+      return;
+    }
+    const targetStrat = strategyOverride || activeStrategyRef.current;
 
     const validationMsg = validateStrategyInput(targetStrat);
     if (validationMsg) {
-      arcadeSoundEngine.play('WARNING_MEME');
-      setValidationError(validationMsg);
-      setErrorBanner(validationMsg);
+      if (!options?.silent) {
+        arcadeSoundEngine.play('WARNING_MEME');
+        setValidationError(validationMsg);
+        setErrorBanner(validationMsg);
+      }
       appendLog(`Validierungsfehler: ${validationMsg}`);
       return;
     }
@@ -612,6 +993,7 @@ export function App() {
         `Starte Backtest "${targetStrat.name}" auf ${targetStrat.symbol} (${targetStrat.timeframe}) · Kapital: $${targetStrat.initialCapital.toFixed(2)} · Max Trades: ${targetStrat.maxConcurrentTrades}/20`
       );
       const result = await executeBacktestJob(targetStrat, controller.signal);
+      if (abortControllerRef.current !== controller) return;
 
       setBacktestResult(result);
       setCandles(result.candles);
@@ -628,22 +1010,24 @@ export function App() {
           : [targetStrat, ...prev];
       });
 
-      if (result.metrics.netProfitUsd >= 0) {
-        arcadeSoundEngine.play('TAKE_PROFIT');
-        pushNotification(
-          'TAKE_PROFIT',
-          `Backtest Gewinn: ${targetStrat.symbol} (${targetStrat.timeframe})`,
-          `Net PnL: +$${result.metrics.netProfitUsd.toFixed(2)} (+${result.metrics.netReturnPct.toFixed(2)}%) · Win-Rate: ${result.metrics.winRatePct}%`,
-          targetStrat.symbol
-        );
-      } else {
-        arcadeSoundEngine.play('STOP_LOSS');
-        pushNotification(
-          'STOP_LOSS',
-          `Backtest Drawdown: ${targetStrat.symbol} (${targetStrat.timeframe})`,
-          `Net PnL: -$${Math.abs(result.metrics.netProfitUsd).toFixed(2)} (${result.metrics.netReturnPct.toFixed(2)}%) · Win-Rate: ${result.metrics.winRatePct}%`,
-          targetStrat.symbol
-        );
+      if (!options?.silent) {
+        if (result.metrics.netProfitUsd >= 0) {
+          arcadeSoundEngine.play('TAKE_PROFIT');
+          pushNotification(
+            'TAKE_PROFIT',
+            `Backtest Gewinn: ${targetStrat.symbol} (${targetStrat.timeframe})`,
+            `Net PnL: +$${result.metrics.netProfitUsd.toFixed(2)} (+${result.metrics.netReturnPct.toFixed(2)}%) · Win-Rate: ${result.metrics.winRatePct}%`,
+            targetStrat.symbol
+          );
+        } else {
+          arcadeSoundEngine.play('STOP_LOSS');
+          pushNotification(
+            'STOP_LOSS',
+            `Backtest Drawdown: ${targetStrat.symbol} (${targetStrat.timeframe})`,
+            `Net PnL: -$${Math.abs(result.metrics.netProfitUsd).toFixed(2)} (${result.metrics.netReturnPct.toFixed(2)}%) · Win-Rate: ${result.metrics.winRatePct}%`,
+            targetStrat.symbol
+          );
+        }
       }
 
       appendLog(
@@ -651,19 +1035,28 @@ export function App() {
       );
     } catch (err: any) {
       if (err.name === 'AbortError') {
-        arcadeSoundEngine.play('WARNING_MEME');
-        setStatusNotice('Laufender Backtest-Job wurde vom Benutzer abgebrochen.');
+        if (abortControllerRef.current !== controller) {
+          return;
+        }
+        if (!options?.silent) {
+          arcadeSoundEngine.play('WARNING_MEME');
+          setStatusNotice('Laufender Backtest-Job wurde vom Benutzer abgebrochen.');
+        }
         appendLog('Job durch Benutzer abgebrochen (AbortController).');
       } else {
-        arcadeSoundEngine.play('CRITICAL_ALARM');
-        const msg = err.message || 'Unbekannter Fehler bei Backtest-Ausführung.';
-        setErrorBanner(msg);
-        appendLog(`FEHLER: ${msg}`);
+        if (!options?.silent) {
+          arcadeSoundEngine.play('CRITICAL_ALARM');
+          const msg = err.message || 'Unbekannter Fehler bei Backtest-Ausführung.';
+          setErrorBanner(msg);
+        }
+        appendLog(`FEHLER: ${err.message || 'Unbekannter Fehler bei Backtest-Ausführung.'}`);
       }
     } finally {
-      setIsJobRunning(false);
-      setJobStageLabel('BEREIT');
-      abortControllerRef.current = null;
+      if (abortControllerRef.current === controller) {
+        setIsJobRunning(false);
+        setJobStageLabel('BEREIT');
+        abortControllerRef.current = null;
+      }
     }
   };
 
@@ -675,18 +1068,75 @@ export function App() {
   };
 
   // Dynamic Symbol or Timeframe Change
-  const handleSymbolOrTimeframeChange = async (newSymbol: string, newTimeframe: TimeframeId) => {
+  const handleSymbolOrTimeframeChange = async (
+    newSymbol: string,
+    newTimeframe: TimeframeId,
+    options?: { silent?: boolean; forceRestart?: boolean }
+  ) => {
+    const baseStrat = activeStrategyRef.current;
+    const normalizedSym = newSymbol.toUpperCase().trim();
+    if (!normalizedSym) return;
     const updated: StrategyDefinition = {
-      ...activeStrategy,
-      symbol: newSymbol.toUpperCase().trim(),
+      ...baseStrat,
+      symbol: normalizedSym,
       timeframe: newTimeframe,
       updatedAt: Date.now(),
     };
     setActiveStrategy(updated);
-    await handleRunBacktest(updated);
+    await handleRunBacktest(updated, options);
   };
 
-  // Save Strategy Persistently (Server + LocalStorage)
+  // Voice Command Action Dispatcher (Teachable Commands via STT or Audio Signature Fallback)
+  const executeVoiceCommandAction = useCallback((cmd: VoiceCommandBinding) => {
+    switch (cmd.actionId) {
+      case 'TOGGLE_PAUSE':
+        voiceCommentatorService.togglePause();
+        break;
+      case 'SKIP_EVENT':
+        voiceCommentatorService.skipCurrent();
+        break;
+      case 'REPLAY_LAST':
+        voiceCommentatorService.replayLast();
+        break;
+      case 'TOGGLE_FULLSCREEN':
+        setIsBroadcastFullscreen((prev) => !prev);
+        break;
+      case 'READ_CMC_PULSE':
+        voiceCommentatorService.announceCmcMarketPulse(
+          cmcDataRef.current,
+          activeStrategyRef.current.symbol
+        );
+        break;
+      case 'FOCUS_LATEST_SYMBOL': {
+        const latestChronicleSym = screenerStatusRef.current?.chronicle?.[0]?.symbol;
+        const targetSym =
+          voiceCommentatorService.getSnapshot().currentItem?.symbol ||
+          latestChronicleSym ||
+          activeStrategyRef.current.symbol;
+        if (targetSym && targetSym !== 'DESK') {
+          void handleSymbolOrTimeframeChange(targetSym, activeStrategyRef.current.timeframe);
+        }
+        break;
+      }
+      case 'CUSTOM_SPEAK':
+        if (cmd.customResponseText) {
+          voiceCommentatorService.speakDirectSentence(cmd.customResponseText, cmd.label);
+        }
+        break;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    voiceCommandListener.setOnMatch((cmd) => {
+      executeVoiceCommandAction(cmd);
+    });
+    return () => {
+      voiceCommandListener.setOnMatch(null);
+    };
+  }, [executeVoiceCommandAction]);
+
+  // Save Strategy Persistently (Server + LocalStorage) and sync Capital to Strategy's Paper Book
   const handleSaveStrategy = async () => {
     const validationMsg = validateStrategyInput(activeStrategy);
     if (validationMsg) {
@@ -699,16 +1149,49 @@ export function App() {
     setActiveStrategy(updated);
 
     try {
-      const nextStore = await persistStrategyToBackend(updated, backtestResult || undefined);
+      const [nextStore] = await Promise.all([
+        persistStrategyToBackend(updated, backtestResult || undefined),
+        syncStrategyPaperBookCapital(updated.id, updated.initialCapital).catch(() => null),
+      ]);
       setStrategies(nextStore.strategies);
+      const updatedBridge = await fetchPaperBridgeStatus(updated.id, updated.initialCapital).catch(
+        () => null
+      );
+      if (updatedBridge) setPaperBridge(updatedBridge);
       arcadeSoundEngine.play('UI_FEEDBACK');
-      setStatusNotice(`Strategie "${updated.name}" persistent gespeichert.`);
-      appendLog(`Strategie "${updated.name}" im Backend & LocalStorage gespeichert.`);
+      setStatusNotice(
+        `Strategie "${updated.name}" gespeichert · Paper Book Basis: $${updated.initialCapital.toFixed(2)}.`
+      );
+      appendLog(
+        `Strategie "${updated.name}" gespeichert (Startkapital & Paper Book: $${updated.initialCapital.toFixed(2)}).`
+      );
       setTimeout(() => setStatusNotice(null), 3500);
     } catch (err: any) {
       arcadeSoundEngine.play('UI_FEEDBACK');
       setStatusNotice(`Lokal gespeichert (Server-Sync Hinweis: ${err.message})`);
       setTimeout(() => setStatusNotice(null), 3500);
+    }
+  };
+
+  // Apply Startkapital directly to active Strategy Paper Book in Redis Data Lake
+  const handleApplyCapitalToBook = async () => {
+    const cap = Number(activeStrategy.initialCapital);
+    if (!Number.isFinite(cap) || cap < 10 || cap > 10000000) {
+      setValidationError('Startkapital muss zwischen $10.00 und $10,000,000.00 liegen.');
+      return;
+    }
+    setValidationError(null);
+    try {
+      await syncStrategyPaperBookCapital(activeStrategy.id, cap);
+      const updatedBridge = await fetchPaperBridgeStatus(activeStrategy.id, cap).catch(() => null);
+      if (updatedBridge) setPaperBridge(updatedBridge);
+      arcadeSoundEngine.play('UI_FEEDBACK');
+      setStatusNotice(`Paper Book "${activeStrategy.name}" auf $${cap.toFixed(2)} Startkapital angepasst.`);
+      appendLog(`Paper Book Kapital angepasst (${activeStrategy.id}): $${cap.toFixed(2)}.`);
+      setTimeout(() => setStatusNotice(null), 3500);
+    } catch (err: any) {
+      arcadeSoundEngine.play('WARNING_MEME');
+      setErrorBanner(`Kapital-Update fehlgeschlagen: ${err.message}`);
     }
   };
 
@@ -720,14 +1203,14 @@ export function App() {
       id: newId,
       name: `Quant Strategie ${strategies.length + 1}`,
       templateType: 'CUSTOM',
-      initialCapital: 1000,
+      initialCapital: 100,
       maxConcurrentTrades: 20,
       updatedAt: Date.now(),
     };
     setStrategies((prev) => [fresh, ...prev]);
     setActiveStrategy(fresh);
     arcadeSoundEngine.play('UI_FEEDBACK');
-    setStatusNotice(`Neue Strategie "${fresh.name}" ($1,000 Basis, Max 20 Trades) angelegt.`);
+    setStatusNotice(`Neue Strategie "${fresh.name}" ($100.00 Paper Book, Max 20 Trades) angelegt.`);
     setTimeout(() => setStatusNotice(null), 3500);
   };
 
@@ -759,7 +1242,7 @@ export function App() {
           ...INITIAL_CLIENT_STRATEGIES[0],
           ...importedStrat,
           id: importedStrat.id || `imp_${Date.now().toString(36)}`,
-          initialCapital: Number(importedStrat.initialCapital) || 1000,
+          initialCapital: Number(importedStrat.initialCapital) || 100,
           maxConcurrentTrades: Math.min(20, Number(importedStrat.maxConcurrentTrades) || 20),
           advanced: {
             ...INITIAL_CLIENT_STRATEGIES[0].advanced,
@@ -819,7 +1302,7 @@ export function App() {
     }
   };
 
-  // Paper Account Order Execution (Enforces Max 20 Concurrent Trades & $1,000.00 Ledger)
+  // Paper Account Order Execution (Enforces Max 20 Concurrent Trades & Strategy-Isolated Redis Paper Book)
   const handleExecutePaperOrder = async (
     side: 'buy' | 'sell',
     symbolOverride?: string,
@@ -828,6 +1311,8 @@ export function App() {
   ) => {
     if (isSubmittingOrder) return;
     const targetSymbol = symbolOverride || activeStrategy.symbol;
+    const currentStratId = activeStrategy.id;
+    const currentCap = activeStrategy.initialCapital || 100;
     const openPositionsCount = paperBridge?.paperLedger?.positions?.length || 0;
     if (side === 'buy' && openPositionsCount >= 20) {
       arcadeSoundEngine.play('CRITICAL_ALARM');
@@ -851,10 +1336,11 @@ export function App() {
         sizeUsd: Math.max(10, sizeUsdOverride ?? orderSizeUsd),
         price: fallbackPrice,
         executionRoute: 'TERMINAL_MANUAL_TICKET',
-        strategyId: activeStrategy.id,
+        strategyId: currentStratId,
         strategyName: activeStrategy.name,
+        initialCapital: currentCap,
       });
-      const updatedBridge = await fetchPaperBridgeStatus().catch(() => null);
+      const updatedBridge = await fetchPaperBridgeStatus(currentStratId, currentCap).catch(() => null);
       if (updatedBridge) {
         setPaperBridge(updatedBridge);
         lastRealizedPnlRef.current = updatedBridge.paperLedger?.realized_pnl ?? null;
@@ -863,23 +1349,26 @@ export function App() {
       const dispVol = res.volume ?? (res as any).vol ?? 0;
       const execPrice = Number(res.price || fallbackPrice || 100);
 
-      // Compute and persist SL/TP bracket when opening or adding to a position
+      // Compute and persist SL/TP bracket scoped to strategy book
       if (side === 'buy') {
         const riskPct = Math.max(0.008, Math.min(0.08, (activeStrategy.slAtrMult || 1.8) * 0.008));
         const rewardPct = riskPct * Math.max(1.2, activeStrategy.tpRMultiple || 2.4);
         const decimals = execPrice < 0.01 ? 6 : execPrice < 1 ? 4 : execPrice < 100 ? 3 : 2;
         const slPrice = Number((execPrice * (1 - riskPct)).toFixed(decimals));
         const tpPrice = Number((execPrice * (1 + rewardPct)).toFixed(decimals));
+        const targetPair = (res.symbol || targetSymbol).toUpperCase();
+        const nextBracket: PaperBookBracketDto = {
+          entryPrice: execPrice,
+          stopLossPrice: slPrice,
+          takeProfitPrice: tpPrice,
+          isBreakEven: false,
+          side: 'LONG',
+        };
         setPaperBrackets((prev) => ({
           ...prev,
-          [res.symbol || targetSymbol]: {
-            entryPrice: execPrice,
-            stopLossPrice: slPrice,
-            takeProfitPrice: tpPrice,
-            isBreakEven: false,
-            side: 'LONG',
-          },
+          [`${currentStratId}::${targetPair}`]: nextBracket,
         }));
+        void saveStrategyPaperBracket(currentStratId, targetPair, nextBracket);
       }
 
       arcadeSoundEngine.play('ORDER_FILL');
@@ -902,36 +1391,57 @@ export function App() {
     }
   };
 
-  // Emergency Kill Switch (Flatten All Open Trades & Bots)
+  // Emergency Kill Switch (Flatten Open Trades on Active Strategy Paper Book)
   const handleEmergencyFlattenAll = async () => {
     arcadeSoundEngine.play('CRITICAL_ALARM', { force: true });
     try {
-      const res = await triggerEmergencyFlatten();
-      const updatedBridge = await fetchPaperBridgeStatus().catch(() => null);
+      const res = await triggerEmergencyFlatten(activeStrategy.id);
+      const updatedBridge = await fetchPaperBridgeStatus(
+        activeStrategy.id,
+        activeStrategy.initialCapital
+      ).catch(() => null);
       if (updatedBridge) setPaperBridge(updatedBridge);
-      setPaperBrackets({});
+      setPaperBrackets((prev) => {
+        const next: Record<string, PaperBookBracketDto> = {};
+        const prefix = `${activeStrategy.id}::`;
+        for (const k of Object.keys(prev)) {
+          if (!k.startsWith(prefix)) next[k] = prev[k];
+        }
+        return next;
+      });
       pushNotification(
         'CRITICAL_ALARM',
         'EMERGENCY KILL SWITCH AUSGEFÜHRT',
         res.message || 'Alle offenen Positionen & Orders wurden sofort glattgestellt.'
       );
       setStatusNotice(res.message || 'Alle Positionen glattgestellt (Kill Switch ausgeführt).');
-      appendLog(`EMERGENCY KILL SWITCH: ${res.message || 'Flatten All ausgeführt'}`);
+      appendLog(`EMERGENCY KILL SWITCH (${activeStrategy.name}): ${res.message || 'Flatten All ausgeführt'}`);
       setTimeout(() => setStatusNotice(null), 4500);
     } catch (err: any) {
       setErrorBanner(`Kill-Switch Fehler: ${err.message}`);
     }
   };
 
-  // Reset Paper Account to $1,000.00
-  const handleResetPaperTo1000 = async () => {
+  // Reset Active Strategy's Isolated Paper Book to configured Startkapital (Default $100.00)
+  const handleResetStrategyPaperBook = async () => {
+    const resetCap = activeStrategy.initialCapital >= 10 ? activeStrategy.initialCapital : 100;
     try {
-      await paperReset(1000);
-      const updatedBridge = await fetchPaperBridgeStatus().catch(() => null);
+      await paperReset(resetCap, activeStrategy.id);
+      const updatedBridge = await fetchPaperBridgeStatus(activeStrategy.id, resetCap).catch(() => null);
       if (updatedBridge) setPaperBridge(updatedBridge);
+      setPaperBrackets((prev) => {
+        const next: Record<string, PaperBookBracketDto> = {};
+        const prefix = `${activeStrategy.id}::`;
+        for (const k of Object.keys(prev)) {
+          if (!k.startsWith(prefix)) next[k] = prev[k];
+        }
+        return next;
+      });
       arcadeSoundEngine.play('UI_FEEDBACK');
-      setStatusNotice('Paper-Konto auf $1,000.00 Startkapital zurückgesetzt.');
-      appendLog('Paper-Konto via CLI auf $1,000.00 zurückgesetzt.');
+      setStatusNotice(
+        `Paper Book "${activeStrategy.name}" auf $${resetCap.toFixed(2)} Startkapital zurückgesetzt.`
+      );
+      appendLog(`Paper Book (${activeStrategy.id}) auf $${resetCap.toFixed(2)} zurückgesetzt.`);
       setTimeout(() => setStatusNotice(null), 3500);
     } catch (err: any) {
       arcadeSoundEngine.play('WARNING_MEME');
@@ -1035,8 +1545,37 @@ export function App() {
     };
   }, [wsMarkets, activeStrategy.symbol, candles, activeTickerDossier]);
 
-  const paperNav = paperBridge?.paperLedger?.current_value ?? 1000.0;
-  const paperCash = paperBridge?.paperLedger?.cash ?? 1000.0;
+  // Real L2 Orderbook snapshot for Chart Heatmap (returns null when unavailable for active symbol)
+  const chartLiveOrderbook = useMemo(() => {
+    if (!isRealKrakenData) return null;
+    const rawSym = (activeStrategy.symbol || '').toUpperCase().trim();
+    let candidate = wsMarkets[activeStrategy.symbol] || wsMarkets[rawSym];
+    if (!candidate) {
+      const normalized = rawSym
+        .replace('-', '/')
+        .replace(/^XBT/, 'BTC')
+        .replace(/USDT$/, '/USD');
+      candidate = wsMarkets[normalized];
+      if (!candidate && !normalized.includes('/') && normalized.endsWith('USD')) {
+        const base = normalized.slice(0, -3);
+        candidate = wsMarkets[`${base}/USD`];
+      }
+    }
+    if (!candidate || !candidate.bids?.length || !candidate.asks?.length) {
+      return null;
+    }
+    const latestClose = candles[candles.length - 1]?.close;
+    if (latestClose && latestClose > 0 && candidate.lastPrice > 0) {
+      const driftPct = Math.abs(candidate.lastPrice - latestClose) / latestClose;
+      if (driftPct > 0.08) return null;
+    }
+    return candidate;
+  }, [isRealKrakenData, wsMarkets, activeStrategy.symbol, candles]);
+
+  const paperInitialBalance =
+    paperBridge?.paperLedger?.initial_balance ?? activeStrategy.initialCapital ?? 100.0;
+  const paperNav = paperBridge?.paperLedger?.current_value ?? paperInitialBalance;
+  const paperCash = paperBridge?.paperLedger?.cash ?? paperInitialBalance;
   const paperOpenPositions = paperBridge?.paperLedger?.positions || [];
   const backtestActivePeak = backtestResult?.metrics.peakConcurrentTrades ?? 0;
   const currentConcurrentCount = paperOpenPositions.length;
@@ -1048,10 +1587,13 @@ export function App() {
     return val.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   };
 
-  // Resolve or deterministically compute SL & TP bracket for any open Paper position
+  // Resolve or deterministically compute SL & TP bracket for any open Paper position (scoped to Strategy Book)
   const resolvePaperBracket = useCallback(
     (pos: { pair: string; entry_price: number; side?: string; type?: string }) => {
-      const existing = paperBrackets[pos.pair];
+      const upperPair = pos.pair.toUpperCase();
+      const serverBracket = paperBridge?.paperLedger?.brackets?.[upperPair];
+      const localBracket = paperBrackets[`${activeStrategy.id}::${upperPair}`];
+      const existing = localBracket || serverBracket;
       const side: 'LONG' | 'SHORT' =
         (pos.side || (pos.type === 'sell' ? 'SHORT' : 'LONG')) === 'SHORT' ? 'SHORT' : 'LONG';
       const entry = Number(pos.entry_price || 100);
@@ -1077,7 +1619,7 @@ export function App() {
         side,
       };
     },
-    [paperBrackets, activeStrategy.slAtrMult, activeStrategy.tpRMultiple]
+    [paperBrackets, paperBridge, activeStrategy.id, activeStrategy.slAtrMult, activeStrategy.tpRMultiple]
   );
 
   // 1-Click Break-Even for Open Paper Position
@@ -1085,21 +1627,24 @@ export function App() {
     (pos: { pair: string; entry_price: number; side?: string; type?: string }) => {
       const current = resolvePaperBracket(pos);
       const entry = Number(pos.entry_price || current.entryPrice);
+      const upperPair = pos.pair.toUpperCase();
+      const nextBracket: PaperBookBracketDto = {
+        ...current,
+        entryPrice: entry,
+        stopLossPrice: entry,
+        isBreakEven: true,
+      };
       setPaperBrackets((prev) => ({
         ...prev,
-        [pos.pair]: {
-          ...current,
-          entryPrice: entry,
-          stopLossPrice: entry,
-          isBreakEven: true,
-        },
+        [`${activeStrategy.id}::${upperPair}`]: nextBracket,
       }));
+      void saveStrategyPaperBracket(activeStrategy.id, upperPair, nextBracket);
       arcadeSoundEngine.play('UI_FEEDBACK');
       setStatusNotice(`Stop-Loss für ${pos.pair} auf Break-Even ($${formatPrice(entry)}) nachgezogen.`);
-      appendLog(`Break-Even SL aktiviert für ${pos.pair} @ $${formatPrice(entry)}.`);
+      appendLog(`Break-Even SL aktiviert für ${pos.pair} (${activeStrategy.name}) @ $${formatPrice(entry)}.`);
       setTimeout(() => setStatusNotice(null), 3500);
     },
-    [resolvePaperBracket, appendLog]
+    [resolvePaperBracket, activeStrategy.id, activeStrategy.name, appendLog]
   );
 
   // Open Paper Positions matching the currently active Chart Symbol for horizontal Entry/SL/TP rendering
@@ -1159,9 +1704,13 @@ export function App() {
           executionRoute: hitTp ? 'AUTO_TAKE_PROFIT_GUARD' : 'AUTO_STOP_LOSS_GUARD',
           strategyId: activeStrategy.id,
           strategyName: activeStrategy.name,
+          initialCapital: activeStrategy.initialCapital,
         })
           .then(async () => {
-            const updatedBridge = await fetchPaperBridgeStatus().catch(() => null);
+            const updatedBridge = await fetchPaperBridgeStatus(
+              activeStrategy.id,
+              activeStrategy.initialCapital
+            ).catch(() => null);
             if (updatedBridge) setPaperBridge(updatedBridge);
             arcadeSoundEngine.play(eventType);
             pushNotification(
@@ -1270,14 +1819,19 @@ export function App() {
           </button>
         </div>
 
-        {/* Center: Grok-Style Rolling Paper Equity ($1,000 Basis), Win/Loss & Concurrent Trades Cap (X / 20) */}
+        {/* Center: Strategy-Isolated Paper Book Equity ($100 Default), Win/Loss & Concurrent Trades Cap (X / 20) */}
         <div className="flex items-center gap-3 font-mono tabular-nums text-xs">
-          <div className="flex items-center gap-1.5 bg-[#07090E] border border-[#1B2230] px-2.5 py-1">
-            <span className="text-[10px] text-[#8B95A5] uppercase">PAPER KONTO:</span>
+          <div
+            className="flex items-center gap-1.5 bg-[#07090E] border border-[#1B2230] px-2.5 py-1"
+            title={`Isoliertes Paper Book für "${activeStrategy.name}" (${paperBridge?.redisKey || `omega:paper_book:${activeStrategy.id}`})`}
+          >
+            <span className="text-[10px] text-[#8B95A5] uppercase">PAPER BOOK:</span>
             <span className="font-bold text-[#089981]">
               ${paperNav.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             </span>
-            <span className="text-[10px] text-[#566173]">(Start: $1,000)</span>
+            <span className="text-[10px] text-[#566173]">
+              (Basis: ${paperInitialBalance.toFixed(0)})
+            </span>
           </div>
 
           {backtestResult && (
@@ -1353,7 +1907,7 @@ export function App() {
             </div>
           )}
 
-          {/* Two-Stage Environment Switch: PAPER [$1,000] vs LIVE EXECUTION */}
+          {/* Two-Stage Environment Switch: PAPER [Strategy Book] vs LIVE EXECUTION */}
           {!liveConfirmStep ? (
             <button
               type="button"
@@ -1364,16 +1918,20 @@ export function App() {
                 } else {
                   arcadeSoundEngine.play('UI_FEEDBACK');
                   setExecutionEnvironment('PAPER');
-                  appendLog('Modus gewechselt auf PAPER EXECUTION ($1,000.00 Konto).');
+                  appendLog(
+                    `Modus gewechselt auf PAPER BOOK ("${activeStrategy.name}" · $${paperInitialBalance.toFixed(2)}).`
+                  );
                 }
               }}
-              className={`px-2 py-1 text-[10px] font-mono font-bold border uppercase ${
+              className={`px-2 py-1 text-[10px] font-mono font-bold border uppercase whitespace-nowrap ${
                 executionEnvironment === 'PAPER'
                   ? 'bg-[#089981]/15 border-[#089981]/50 text-[#089981]'
                   : 'bg-[#F59E0B]/20 border-[#F59E0B] text-[#F59E0B]'
               }`}
             >
-              {executionEnvironment === 'PAPER' ? 'MODUS: PAPER ($1K)' : 'MODUS: LIVE ARMED'}
+              {executionEnvironment === 'PAPER'
+                ? `MODUS: PAPER ($${paperInitialBalance.toFixed(0)})`
+                : 'MODUS: LIVE ARMED'}
             </button>
           ) : (
             <div className="flex items-center gap-1 bg-[#F59E0B]/20 border border-[#F59E0B] px-1.5 py-0.5 text-[10px] font-mono">
@@ -1754,11 +2312,11 @@ export function App() {
                 </div>
               </div>
 
-              {/* 3. Core Parameters (Directly Visible): Capital ($1,000), Max 20 Trades, Risk, Costs, ATR & Exit Mode */}
+              {/* 3. Core Parameters (Directly Visible): Strategy Capital ($100 Default), Max 20 Trades, Risk, Costs, ATR & Exit Mode */}
               <div className="bg-[#07090E] border border-[#1B2230] p-2 space-y-2">
                 <div className="flex items-center justify-between">
                   <span className="text-[10px] font-bold uppercase tracking-wider text-[#8B95A5]">
-                    KERN-PARAMETER & RISIKO-KONTROLLE
+                    KERN-PARAMETER & PAPER BOOK
                   </span>
                   <span className="text-[9px] font-mono text-[#089981]">CAP ≤ 20 TRADES</span>
                 </div>
@@ -1770,7 +2328,8 @@ export function App() {
                     </label>
                     <input
                       type="number"
-                      step="100"
+                      min={10}
+                      step="10"
                       value={activeStrategy.initialCapital}
                       onChange={(e) =>
                         setActiveStrategy({
@@ -1778,7 +2337,7 @@ export function App() {
                           initialCapital: Number(e.target.value),
                         })
                       }
-                      className="w-full bg-[#0C1017] border border-[#1B2230] px-2 py-1 text-xs font-mono tabular-nums font-bold text-[#089981]"
+                      className="w-full bg-[#0C1017] border border-[#1B2230] px-2 py-1 text-xs font-mono tabular-nums font-bold text-[#089981] focus:outline-none focus:border-[#00E5FF]"
                     />
                   </div>
                   <div>
@@ -1799,6 +2358,22 @@ export function App() {
                       className="w-full bg-[#0C1017] border border-[#1B2230] px-2 py-1 text-xs font-mono tabular-nums font-bold text-[#00E5FF]"
                     />
                   </div>
+                </div>
+
+                <div className="flex items-center justify-between gap-2 bg-[#0C1017] border border-[#1B2230] px-2 py-1 text-[10px] font-mono tabular-nums">
+                  <span className="text-[#8B95A5] truncate">
+                    Book Cash: <span className="text-[#089981] font-bold">${paperCash.toFixed(2)}</span>
+                    {' · '}
+                    Basis: ${paperInitialBalance.toFixed(0)}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleApplyCapitalToBook}
+                    title="Startkapital direkt auf das isolierte Paper Book dieser Strategie im Redis Data Lake anwenden"
+                    className="px-1.5 py-0.5 bg-[#089981]/15 hover:bg-[#089981]/30 border border-[#089981]/50 text-[#089981] text-[9px] font-bold uppercase whitespace-nowrap shrink-0"
+                  >
+                    AUF BOOK ANWENDEN
+                  </button>
                 </div>
 
                 <div className="grid grid-cols-2 gap-2">
@@ -2467,6 +3042,7 @@ export function App() {
             fastEmaPeriod={activeStrategy.advanced.fastPeriod}
             slowEmaPeriod={activeStrategy.advanced.slowPeriod}
             openPaperPositions={chartOpenPaperPositions}
+            liveOrderbook={chartLiveOrderbook}
           />
 
           {/* 4. Bottom Evaluation & Execution Dock */}
@@ -2477,13 +3053,30 @@ export function App() {
                 <button
                   type="button"
                   onClick={() => setBottomTab('TRADES')}
-                  className={`px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider border-b-2 ${
+                  className={`px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider border-b-2 whitespace-nowrap shrink-0 ${
                     bottomTab === 'TRADES'
                       ? 'border-[#00E5FF] text-[#00E5FF] bg-[#0C1017]'
                       : 'border-transparent text-[#8B95A5] hover:text-[#E6EDF3]'
                   }`}
                 >
                   TRADE-LISTE & LOG ({backtestResult?.trades.length || 0})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setBottomTab('AGENTS')}
+                  className={`px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider border-b-2 flex items-center gap-1 whitespace-nowrap shrink-0 ${
+                    bottomTab === 'AGENTS'
+                      ? 'border-[#00E5FF] text-[#00E5FF] bg-[#0C1017]'
+                      : 'border-transparent text-[#8B95A5] hover:text-[#E6EDF3]'
+                  }`}
+                >
+                  <Bot className="w-3 h-3 text-[#00E5FF]" />
+                  <span>
+                    5-AGENTEN KONVERGENZ
+                    {agentConvergenceState?.latest
+                      ? ` (${agentConvergenceState.latest.convergencePct}%)`
+                      : ''}
+                  </span>
                 </button>
                 <button
                   type="button"
@@ -2496,6 +3089,20 @@ export function App() {
                 >
                   <Globe className="w-3 h-3 text-[#60A5FA]" />
                   <span>CMC INTELLIGENCE & DEX ({cmcData?.rankedAssets.length || 19})</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setBottomTab('PIONEX')}
+                  className={`px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider border-b-2 flex items-center gap-1 ${
+                    bottomTab === 'PIONEX'
+                      ? 'border-[#F97316] text-[#F97316] bg-[#0C1017]'
+                      : 'border-transparent text-[#8B95A5] hover:text-[#E6EDF3]'
+                  }`}
+                >
+                  <Radar className="w-3 h-3 text-[#F97316]" />
+                  <span>
+                    PIONEX &amp; NEWS ({pionexData?.totalUsdtMarkets || 0} USDT · {(newsData?.items.length || 0)})
+                  </span>
                 </button>
                 <button
                   type="button"
@@ -2707,6 +3314,44 @@ export function App() {
               </div>
             )}
 
+            {/* TAB 1A: HYBRID 5-AGENT CONVERGENCE & RISK-CAPPED AUTO-EXECUTION */}
+            {bottomTab === 'AGENTS' && (
+              <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
+                <AgentConvergencePanel
+                  mode="TERMINAL"
+                  state={
+                    agentConvergenceState || {
+                      latest: null,
+                      history: [],
+                      executions: [],
+                      config: {
+                        autoExecuteEnabled: true,
+                        minConvergencePct: 70,
+                        maxRiskPctPerTrade: 2,
+                        cooldownSecPerSymbol: 300,
+                        autoSpeakDebate: true,
+                      },
+                      personas: [],
+                    }
+                  }
+                  activeSymbol={activeStrategy.symbol}
+                  isEvaluating={isEvaluatingConvergence}
+                  errorMsg={convergenceError}
+                  onEvaluateNow={() => void handleRunAgentConvergence('MANUAL')}
+                  onSelectSymbol={(sym) =>
+                    void handleSymbolOrTimeframeChange(sym, activeStrategy.timeframe)
+                  }
+                  onSpeakDebate={(dec: AgentConvergenceDecision) =>
+                    voiceCommentatorService.announceAgentConvergenceDebate(dec, true)
+                  }
+                  onSpeakVote={(vote: AgentVote, sym: string) =>
+                    voiceCommentatorService.speakAgentPersonaVote(vote, sym)
+                  }
+                  onUpdateConfig={(patch) => void handleUpdateAgentConfig(patch)}
+                />
+              </div>
+            )}
+
             {/* TAB 1B: COINMARKETCAP INTELLIGENCE, RANKED SCREENER, DEX ON-CHAIN & EXCHANGE LIQUIDITY */}
             {bottomTab === 'CMC' && (
               <div className="flex-1 min-h-0 overflow-hidden">
@@ -2718,6 +3363,25 @@ export function App() {
                     handleSymbolOrTimeframeChange(sym, activeStrategy.timeframe);
                   }}
                   onRefresh={handleRefreshCmc}
+                />
+              </div>
+            )}
+
+            {/* TAB 1C: PIONEX USDT UNIVERSE SCANNER (@pionex/pionex-ai-kit) & YAHOO / MSN FINANCE NEWS */}
+            {bottomTab === 'PIONEX' && (
+              <div className="flex-1 min-h-0 overflow-hidden">
+                <TerminalPionexUniverseTab
+                  pionexData={pionexData}
+                  newsData={newsData}
+                  cmcData={cmcData}
+                  isLoadingPionex={isPionexLoading}
+                  isLoadingNews={isNewsLoading}
+                  activeSymbol={activeStrategy.symbol}
+                  onSelectSymbol={(sym) => {
+                    handleSymbolOrTimeframeChange(sym, activeStrategy.timeframe);
+                  }}
+                  onScanPionex={handleScanPionex}
+                  onRefreshNews={handleRefreshFinanceNews}
                 />
               </div>
             )}
@@ -2738,7 +3402,7 @@ export function App() {
                   {/* Col 1: Core Return & Quality */}
                   <div className="bg-[#07090E] border border-[#1B2230] p-2.5 space-y-1.5">
                     <div className="text-[10px] font-bold text-[#00E5FF] uppercase border-b border-[#1B2230] pb-1">
-                      RENDITE & TRADE-QUALITÄT ($1,000 BASIS)
+                      RENDITE & TRADE-QUALITÄT (${activeStrategy.initialCapital.toFixed(0)} BASIS)
                     </div>
                     <div className="flex justify-between">
                       <span className="text-[#8B95A5]">Startkapital:</span>
@@ -2860,16 +3524,16 @@ export function App() {
               </div>
             )}
 
-            {/* TAB 3: PAPER / LIVE EXECUTION BLOTTER ($1,000 ACCOUNT, MAX 20 TRADES) */}
+            {/* TAB 3: STRATEGY-ISOLATED PAPER / LIVE EXECUTION BLOTTER */}
             {bottomTab === 'EXECUTION' && (
               <div className="flex-1 overflow-y-auto p-3 grid grid-cols-1 md:grid-cols-3 gap-3 font-mono tabular-nums text-xs">
                 {/* Direct Order Ticket */}
                 <div className="bg-[#07090E] border border-[#1B2230] p-2.5 space-y-2">
                   <div className="flex items-center justify-between border-b border-[#1B2230] pb-1">
-                    <span className="text-[10px] font-bold text-[#00E5FF] uppercase">
-                      DIREKT-ORDER ({executionEnvironment})
+                    <span className="text-[10px] font-bold text-[#00E5FF] uppercase truncate">
+                      PAPER BOOK · {activeStrategy.name}
                     </span>
-                    <span className="text-[10px] text-[#089981]">
+                    <span className="text-[10px] text-[#089981] whitespace-nowrap ml-2">
                       Cash: ${paperCash.toFixed(2)}
                     </span>
                   </div>
@@ -2888,8 +3552,8 @@ export function App() {
                       <input
                         type="number"
                         min={10}
-                        max={1000}
-                        step={10}
+                        max={Math.max(100, Math.round(paperInitialBalance * 2))}
+                        step={5}
                         value={orderSizeUsd}
                         onChange={(e) => setOrderSizeUsd(Number(e.target.value))}
                         className="w-full bg-[#0C1017] border border-[#1B2230] px-2 py-1 font-bold text-[#00E5FF]"
@@ -2922,29 +3586,34 @@ export function App() {
                     </span>
                     <button
                       type="button"
-                      onClick={handleResetPaperTo1000}
-                      className="text-[10px] text-[#00E5FF] hover:underline flex items-center gap-1"
+                      onClick={handleResetStrategyPaperBook}
+                      className="text-[10px] text-[#00E5FF] hover:underline flex items-center gap-1 whitespace-nowrap"
                     >
                       <RotateCcw className="w-2.5 h-2.5" />
-                      <span>Konto auf $1,000.00 Reset</span>
+                      <span>Book auf ${(activeStrategy.initialCapital || 100).toFixed(2)} Reset</span>
                     </button>
                   </div>
                 </div>
 
                 {/* Open Paper Positions Table */}
                 <div className="md:col-span-2 bg-[#07090E] border border-[#1B2230] p-2.5 flex flex-col">
-                  <div className="flex items-center justify-between border-b border-[#1B2230] pb-1 mb-1.5">
-                    <span className="text-[10px] font-bold text-[#E6EDF3] uppercase">
-                      AKTIVE PAPER-POSITIONEN ({paperOpenPositions.length} / 20 MAX)
+                  <div className="flex items-center justify-between border-b border-[#1B2230] pb-1 mb-1.5 gap-2">
+                    <span className="text-[10px] font-bold text-[#E6EDF3] uppercase truncate">
+                      AKTIVES PAPER BOOK: {activeStrategy.name} ({paperOpenPositions.length} / 20 MAX)
                     </span>
-                    <span className="text-[10px] text-[#8B95A5]">
-                      Quelle: Kraken CLI 0.4.1 Paper Ledger ($1,000.00 Basis)
+                    <span className="text-[10px] text-[#8B95A5] whitespace-nowrap">
+                      {paperBridge?.lakeInfo?.backend === 'REDIS_RESP' ? 'Redis RESP' : 'Redis Data Lake'} ·{' '}
+                      <span className="text-[#00E5FF]">
+                        {paperBridge?.redisKey || `omega:paper_book:${activeStrategy.id}`}
+                      </span>{' '}
+                      · Basis: ${paperInitialBalance.toFixed(2)}
                     </span>
                   </div>
 
                   {paperOpenPositions.length === 0 ? (
-                    <div className="flex-1 flex items-center justify-center text-[#8B95A5] text-xs py-6">
-                      Keine offenen Positionen im Paper-Ledger (0 / 20 belegt · $1,000.00 verfügbar).
+                    <div className="flex-1 flex items-center justify-center text-[#8B95A5] text-xs py-6 text-center">
+                      Keine offenen Positionen im Paper Book "{activeStrategy.name}" (0 / 20 belegt · $
+                      {paperCash.toFixed(2)} verfügbar).
                     </div>
                   ) : (
                     <div className="overflow-y-auto max-h-40">
@@ -3087,7 +3756,7 @@ export function App() {
                 <div className="flex items-center justify-between mb-1.5">
                   <span className="text-[10px] font-mono text-[#8B95A5]">
                     TradingView Pine Script v6 · Synchronisiert mit "{activeStrategy.name}" (
-                    {activeStrategy.symbol} · {activeStrategy.timeframe} · $1,000 Kapital · Max 20
+                    {activeStrategy.symbol} · {activeStrategy.timeframe} · ${activeStrategy.initialCapital.toFixed(0)} Kapital · Max 20
                     Trades)
                   </span>
                   <div className="flex items-center gap-1.5">
@@ -3140,7 +3809,7 @@ export function App() {
             D. RIGHT WORKSPACE ZONE (295px): CHRONICLE OF EVENTS & BEAM OF ABSORPTION
            ----------------------------------------------------------------- */}
         <aside className="w-[295px] bg-[#0C1017] border-l border-[#1B2230] flex flex-col min-h-0 shrink-0">
-          {/* Top Half: Chronicle of Events */}
+          {/* Top Half: Chronicle of Events + Integrated Live Voice Commentator Desk */}
           <div className="flex-1 flex flex-col min-h-0 border-b border-[#1B2230]">
             <div className="px-2.5 py-1.5 bg-[#07090E] border-b border-[#1B2230] flex items-center justify-between">
               <div className="flex items-center gap-1.5">
@@ -3149,8 +3818,17 @@ export function App() {
                   CHRONICLE OF EVENTS (LIVE)
                 </span>
               </div>
-              <span className="text-[9px] font-mono text-[#8B95A5]">7 QUELLEN</span>
+              <span className="text-[9px] font-mono text-[#8B95A5]">LIVE QUELLEN</span>
             </div>
+
+            <LiveCommentatorDesk
+              voiceSnap={voiceSnap}
+              listenerSnap={listenerSnap}
+              cmcData={cmcData}
+              activeSymbol={activeStrategy.symbol}
+              onOpenTeachModal={() => setIsVoiceTeachModalOpen(true)}
+              onEnterFullscreenStream={() => setIsBroadcastFullscreen(true)}
+            />
 
             <div className="flex-1 overflow-y-auto divide-y divide-[#1B2230]/50 font-mono tabular-nums text-[10px]">
               {(screenerStatus?.chronicle || []).map((ev: ChronicleAnomalyEvent) => (
@@ -3166,11 +3844,24 @@ export function App() {
                       <span className="text-[#8B95A5]">{ev.timeFormatted}</span>
                       <span className="font-bold text-[#00E5FF]">{ev.symbol}</span>
                     </div>
-                    <span
-                      className={`text-[8px] px-1 border ${PROVIDER_BADGE_STYLES[ev.provider]}`}
-                    >
-                      {ev.provider}
-                    </span>
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          voiceCommentatorService.enqueueChronicleEvent(ev, cmcData, true);
+                        }}
+                        title="Dieses Event jetzt vom Live-Kommentator vorlesen lassen"
+                        className="p-0.5 text-[#8B95A5] hover:text-[#00E5FF]"
+                      >
+                        <Volume2 className="w-2.5 h-2.5" />
+                      </button>
+                      <span
+                        className={`text-[8px] px-1 border ${PROVIDER_BADGE_STYLES[ev.provider]}`}
+                      >
+                        {ev.provider}
+                      </span>
+                    </div>
                   </div>
                   <div
                     className={`mt-0.5 leading-tight ${
@@ -3317,6 +4008,46 @@ export function App() {
           onSelectFile={handleDriveSelectFile}
         />
       )}
+
+      {/* Fullscreen YouTube Live Commentator Stream (Zero Backtest / Paper Views) */}
+      <BroadcastStreamFullscreen
+        isOpen={isBroadcastFullscreen}
+        onExit={() => setIsBroadcastFullscreen(false)}
+        symbol={activeStrategy.symbol}
+        timeframe={activeStrategy.timeframe}
+        provider={activeProvider}
+        candles={candles}
+        fastEmaPeriod={activeStrategy.advanced.fastPeriod}
+        slowEmaPeriod={activeStrategy.advanced.slowPeriod}
+        liveOrderbook={chartLiveOrderbook}
+        screenerStatus={screenerStatus}
+        cmcData={cmcData}
+        newsData={newsData}
+        pionexData={pionexData}
+        backtestResult={backtestResult}
+        voiceSnap={voiceSnap}
+        listenerSnap={listenerSnap}
+        onSelectSymbol={(sym) =>
+          void handleSymbolOrTimeframeChange(sym, activeStrategyRef.current.timeframe, {
+            silent: true,
+            forceRestart: true,
+          })
+        }
+        onOpenTeachModal={() => setIsVoiceTeachModalOpen(true)}
+        agentConvergenceState={agentConvergenceState}
+        isEvaluatingConvergence={isEvaluatingConvergence}
+        convergenceError={convergenceError}
+        onEvaluateConvergenceNow={() => void handleRunAgentConvergence('MANUAL')}
+      />
+
+      {/* Teachable Voice Commands & Custom Event Audio Clips Modal */}
+      <VoiceTeachModal
+        isOpen={isVoiceTeachModalOpen}
+        onClose={() => setIsVoiceTeachModalOpen(false)}
+        commands={voiceCommands}
+        onCommandsChange={setVoiceCommands}
+        onExecuteCommandTest={executeVoiceCommandAction}
+      />
     </div>
   );
 }

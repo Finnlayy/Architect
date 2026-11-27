@@ -2,9 +2,23 @@ import express, { Request, Response } from 'express';
 import path from 'path';
 import fs from 'fs';
 import https from 'https';
+import v8 from 'v8';
+import { monitorEventLoopDelay } from 'node:perf_hooks';
 import { execFile, execSync } from 'child_process';
 import WebSocket, { WebSocketServer } from 'ws';
 import { createServer as createViteServer } from 'vite';
+
+const elDelayMonitor = monitorEventLoopDelay({ resolution: 20 });
+elDelayMonitor.enable();
+
+// 24/7 Process Resilience Guards: Prevent transient network/socket errors from terminating the server
+process.on('uncaughtException', (err) => {
+  console.error('[24/7 Watchdog] Caught uncaughtException (server kept alive):', err?.message || err);
+});
+
+process.on('unhandledRejection', (reason: any) => {
+  console.error('[24/7 Watchdog] Caught unhandledRejection (server kept alive):', reason?.message || reason);
+});
 import { KRAKEN_TOOLS_CATALOG } from './src/data/krakenToolsCatalog';
 import {
   KRAKEN_TOP_LEVEL_COMMANDS,
@@ -24,6 +38,8 @@ import {
   getAgentTraceById,
   clearAgentTraces,
   getAgentStatus,
+  pruneAgentMemory,
+  getAgentMemoryStats,
   AgentEngineContext,
 } from './src/server/omegaAgent.ts';
 import {
@@ -34,17 +50,80 @@ import {
   configureScreenerSchedule,
   loadPersistentStrategyStore,
   savePersistentStrategyStore,
-  MAX_CONCURRENT_TRADES_HARD_CAP,
-  DEFAULT_PAPER_INITIAL_CAPITAL,
   getCmcIntelligenceData,
   refreshCmcIntelligenceData,
+  trimTerminalEngineMemory,
+  MAX_CONCURRENT_TRADES_HARD_CAP,
+  DEFAULT_PAPER_INITIAL_CAPITAL,
 } from './src/server/terminalEngine.ts';
-import { TimeframeId, StrategyDefinition } from './src/types/terminal.ts';
+import {
+  PAPER_BOOK_DEFAULT_CAPITAL,
+  StrategyPaperBook,
+  sanitizeStrategyId,
+  getOrCreateStrategyPaperBook,
+  hydrateStrategyBookFromExternalRedis,
+  saveStrategyPaperBook,
+  resetStrategyPaperBook,
+  updateStrategyPaperBookCapital,
+  setStrategyPaperBracket,
+  deleteStrategyPaperBracket,
+  listAllStrategyPaperBooks,
+  pruneRedisPaperLakeCache,
+  getRedisLakeMeta,
+} from './src/server/redisPaperLake.ts';
+import {
+  generateLiveAnchorCommentary,
+  pruneCommentaryCache,
+  getCommentaryCacheSize,
+} from './src/server/liveCommentator.ts';
+import {
+  scanPionexUniverse,
+  fetchFinanceNewsFeed,
+  prunePionexAndNewsCaches,
+  getPionexMemoryStats,
+} from './src/server/pionexAndNewsEngine.ts';
+import {
+  getQwenTtsStatus,
+  synthesizeWithQwenTts,
+  registerQwenClonedVoice,
+} from './src/server/qwenTtsBridge.ts';
+import {
+  getGoogleTtsStatus,
+  synthesizeWithGoogleTts,
+  pruneGoogleTtsCache,
+} from './src/server/googleTtsEngine.ts';
+import {
+  getLatestKeyTakeawayState,
+  generate30MinKeyTakeaway,
+  getStudioChatState,
+  addBuiltInStudioChatMessage,
+  connectYoutubeLiveChat,
+  disconnectYoutubeLiveChat,
+  pollYoutubeLiveChat,
+  setStudioAutoAnswer,
+  generateLiveChatQaReply,
+  pruneStudioBroadcastMemory,
+} from './src/server/studioBroadcastEngine.ts';
+import {
+  canExecuteSymbolCooldown,
+  evaluateAgentConvergence,
+  getAgentConvergenceState,
+  getAgentExecutionConfig,
+  pruneAgentConvergenceMemory,
+  recordAgentExecution,
+  updateAgentExecutionConfig,
+} from './src/server/agentConvergenceEngine.ts';
+import {
+  AgentConvergenceTrigger,
+  AgentPaperExecutionRecord,
+  StrategyDefinition,
+  TimeframeId,
+} from './src/types/terminal.ts';
 
 const app = express();
-const PORT = 3000;
+const PORT = Number(process.env.PORT) || 3000;
 
-app.use(express.json());
+app.use(express.json({ limit: '1mb' }));
 
 // In-Memory Kraken Orderbook Data Structure
 interface OrderbookLevel {
@@ -288,7 +367,8 @@ const swarmBotsServerState: SwarmBotServerState[] = [
 const swarmWsClients = new Set<WebSocket>();
 
 /**
- * Synchronously recalibrate active worker bots against incoming live ticks
+ * Recalibrate active worker bots against incoming live ticks (in-memory state update).
+ * High-frequency: Runs in memory without immediately creating WS frames for every micro-tick.
  */
 function updateSwarmBotsFromMarket(canonicalSymbol: string, price: number) {
   if (!price || price <= 0) return;
@@ -315,78 +395,100 @@ function updateSwarmBotsFromMarket(canonicalSymbol: string, price: number) {
         value: pnlValue,
         percentage: pnlPct,
       };
-
-      // Broadcast TICK_UPDATE to all active /api/v1/swarm/stream clients
-      const tickMsg = JSON.stringify({
-        type: 'TICK_UPDATE',
-        payload: {
-          id: bot.id,
-          currentPrice: bot.currentPrice,
-          unrealizedPnL: bot.unrealizedPnL,
-          unrealizedPnlUsd: pnlValue,
-          unrealizedPnlPct: pnlPct,
-          metrics: bot.metrics,
-          status: bot.status,
-          lastUpdated: new Date().toTimeString().split(' ')[0],
-        },
-      });
-      for (const client of swarmWsClients) {
-        if (client.readyState === WebSocket.OPEN) {
-          try {
-            client.send(tickMsg);
-          } catch (e) {
-            // ignore send error
-          }
-        }
-      }
     }
   }
 }
 
+/**
+ * Throttled market & bot broadcast engine (4 Hz / 250ms batching) with strict backpressure protection.
+ */
 function broadcastMarketUpdate(symbol: string) {
   dirtySymbols.add(symbol);
-  if (marketsState[symbol]) {
-    updateSwarmBotsFromMarket(symbol, marketsState[symbol].lastPrice);
-    syncPaperLedgerWithMarket();
-  }
+
   if (!broadcastTimeout) {
     broadcastTimeout = setTimeout(() => {
       broadcastTimeout = null;
-      if (sseClients.size === 0 && wsPort1000Clients.size === 0) {
-        dirtySymbols.clear();
-        return;
-      }
+
+      // 1. Synchronize bots and paper ledger on the batched tick
       for (const sym of dirtySymbols) {
-        if (!marketsState[sym]) continue;
-        const payload = JSON.stringify({
-          type: 'MARKET_TICK',
-          symbol: sym,
-          data: marketsState[sym],
-          timestamp: Date.now(),
-        });
-        // 1. Broadcast to SSE clients
-        for (const client of sseClients) {
-          try {
-            client.write(`event: market_update\ndata: ${payload}\n\n`);
-          } catch (e) {
-            sseClients.delete(client);
+        if (marketsState[sym]) {
+          updateSwarmBotsFromMarket(sym, marketsState[sym].lastPrice);
+        }
+      }
+      syncPaperLedgerWithMarket();
+
+      // 2. Broadcast to Swarm WS clients (capped at 4 Hz) with backpressure guard
+      if (swarmWsClients.size > 0) {
+        for (const bot of swarmBotsServerState) {
+          if (bot.status !== 'active') continue;
+          const tickMsg = JSON.stringify({
+            type: 'TICK_UPDATE',
+            payload: {
+              id: bot.id,
+              currentPrice: bot.currentPrice,
+              unrealizedPnL: bot.unrealizedPnL,
+              unrealizedPnlUsd: bot.unrealizedPnL.value,
+              unrealizedPnlPct: bot.unrealizedPnL.percentage,
+              metrics: bot.metrics,
+              status: bot.status,
+              lastUpdated: new Date().toTimeString().split(' ')[0],
+            },
+          });
+
+          for (const client of swarmWsClients) {
+            if (client.readyState === WebSocket.OPEN) {
+              // Backpressure guard: drop frame if socket write queue exceeds 64KB
+              if (client.bufferedAmount > 64 * 1024) continue;
+              try {
+                client.send(tickMsg);
+              } catch (e) {
+                // ignore
+              }
+            }
           }
         }
-        // 2. Broadcast to Port 1000 and direct WebSocket clients
-        for (const client of wsPort1000Clients) {
-          try {
-            if (client.readyState === WebSocket.OPEN) {
-              client.send(payload);
-            } else {
+      }
+
+      // 3. Broadcast Market ticks to SSE and WS Port 1000 clients with backpressure guard
+      if (sseClients.size > 0 || wsPort1000Clients.size > 0) {
+        for (const sym of dirtySymbols) {
+          if (!marketsState[sym]) continue;
+          const payload = JSON.stringify({
+            type: 'MARKET_TICK',
+            symbol: sym,
+            data: marketsState[sym],
+            timestamp: Date.now(),
+          });
+
+          // SSE clients
+          for (const client of sseClients) {
+            try {
+              // Backpressure guard for SSE Writable stream
+              if ((client as any).writableNeedDrain) continue;
+              client.write(`event: market_update\ndata: ${payload}\n\n`);
+            } catch (e) {
+              sseClients.delete(client);
+            }
+          }
+
+          // Port 1000 / direct WS clients
+          for (const client of wsPort1000Clients) {
+            try {
+              if (client.readyState === WebSocket.OPEN) {
+                if (client.bufferedAmount > 64 * 1024) continue;
+                client.send(payload);
+              } else {
+                wsPort1000Clients.delete(client);
+              }
+            } catch (e) {
               wsPort1000Clients.delete(client);
             }
-          } catch (e) {
-            wsPort1000Clients.delete(client);
           }
         }
       }
+
       dirtySymbols.clear();
-    }, 150);
+    }, 250);
   }
 }
 
@@ -401,10 +503,12 @@ function bootstrapKrakenDepthRest() {
 
   for (const { krakenPair, canonical } of pairs) {
     const url = `https://api.kraken.com/0/public/Depth?pair=${krakenPair}&count=10`;
-    https
+    const req = https
       .get(url, (res) => {
         let body = '';
-        res.on('data', (c) => (body += c));
+        res.on('data', (c) => {
+          if (body.length < 256 * 1024) body += c;
+        });
         res.on('end', () => {
           try {
             const parsed = JSON.parse(body);
@@ -423,13 +527,19 @@ function bootstrapKrakenDepthRest() {
       .on('error', () => {
         // Network offline fallback
       });
+    req.setTimeout(5000, () => {
+      req.destroy();
+    });
   }
 }
 
 // Rapid REST Ticker bootstrap to seed accurate real prices instantly
 async function bootstrapKrakenTickerRest() {
   try {
-    const res = await fetch('https://api.kraken.com/0/public/Ticker?pair=HYPEUSD,XBTUSD,ETHUSD,SOLUSD');
+    const res = await fetch(
+      'https://api.kraken.com/0/public/Ticker?pair=HYPEUSD,XBTUSD,ETHUSD,SOLUSD',
+      { signal: AbortSignal.timeout(6000) }
+    );
     const json: any = await res.json();
     if (json && json.result) {
       const mapping: Record<string, string> = {
@@ -504,6 +614,13 @@ let reconnectTimer: NodeJS.Timeout | null = null;
 function connectKrakenWebSocket() {
   if (krakenWs && (krakenWs.readyState === WebSocket.OPEN || krakenWs.readyState === WebSocket.CONNECTING)) {
     return;
+  }
+  if (krakenWs) {
+    try {
+      krakenWs.removeAllListeners();
+      krakenWs.terminate();
+    } catch {}
+    krakenWs = null;
   }
   if (reconnectTimer) {
     clearTimeout(reconnectTimer);
@@ -727,6 +844,12 @@ function connectKrakenWebSocket() {
 
     krakenWs.on('close', () => {
       krakenWsStatus = 'DISCONNECTED';
+      try {
+        ws.removeAllListeners();
+      } catch {}
+      if (krakenWs === ws) {
+        krakenWs = null;
+      }
       krakenReconnectAttempts++;
       const delay = Math.min(10000, 1000 * Math.pow(1.5, krakenReconnectAttempts));
       console.warn(`[Kraken Stream] Connection closed. Auto-reconnecting in ${Math.round(delay)}ms...`);
@@ -739,26 +862,207 @@ function connectKrakenWebSocket() {
   }
 }
 
-// Initial bootstrap
-bootstrapKrakenDepthRest();
-connectKrakenWebSocket();
-
-// Periodic REST refresh as watchdog (every 10 seconds) to ensure fresh depth even under WS network pause
+// Periodic REST refresh as watchdog (every 15 seconds) to ensure fresh depth even under WS network pause
 setInterval(() => {
-  if (krakenWsStatus !== 'CONNECTED' || Date.now() - krakenLastMessageAt > 8000) {
+  if (krakenWsStatus !== 'CONNECTED' || Date.now() - krakenLastMessageAt > 12000) {
     bootstrapKrakenDepthRest();
   }
-}, 10000);
+}, 15000);
+
+// ============================================================================
+// 24/7 MEMORY WATCHDOG & AUTOMATIC SELF-HEALING HYGIENE ENGINE
+// ============================================================================
+interface MemorySample {
+  timestamp: number;
+  timeFormatted: string;
+  rssMb: number;
+  heapUsedMb: number;
+}
+
+const memoryHistory: MemorySample[] = [];
+let autoSweepsCount = 0;
+let lastSweepAt: number | null = null;
+let lastAsyncSweepAt = 0;
+let lastGcAt = 0;
+let sweepScheduled = false;
+
+function performMemoryHygieneSweep(forceGc = false, aggressive = false) {
+  // 1. Prune closed, dead, or stalled backpressured WebSocket & SSE clients
+  for (const client of wsPort1000Clients) {
+    if (client.readyState !== WebSocket.OPEN && client.readyState !== WebSocket.CONNECTING) {
+      wsPort1000Clients.delete(client);
+    }
+  }
+  for (const client of swarmWsClients) {
+    if (client.readyState !== WebSocket.OPEN && client.readyState !== WebSocket.CONNECTING) {
+      swarmWsClients.delete(client);
+    }
+  }
+  for (const resClient of sseClients) {
+    if ((resClient as any).writableEnded || (resClient as any).destroyed) {
+      sseClients.delete(resClient);
+    }
+  }
+
+  // 2. Enforce strict O(1)/bounded caps across all in-memory stores & caches
+  if (swarmBotsHistory.length > 40) swarmBotsHistory.length = 40;
+  if (swarmBotsServerState.length > 25) swarmBotsServerState.length = 25;
+  if (krakenCliJournal.length > 80) krakenCliJournal.length = 80;
+  if (krakenCliState?.session?.journal && krakenCliState.session.journal.length > 80) {
+    krakenCliState.session.journal.splice(0, krakenCliState.session.journal.length - 80);
+  }
+  if (krakenCliState?.paperLedger?.history && krakenCliState.paperLedger.history.length > 80) {
+    krakenCliState.paperLedger.history.length = 80;
+  }
+  for (const m of Object.values(marketsState)) {
+    if (m.recentTrades && m.recentTrades.length > 20) m.recentTrades.length = 20;
+    if (m.bids && m.bids.length > 10) m.bids.length = 10;
+    if (m.asks && m.asks.length > 10) m.asks.length = 10;
+  }
+  if (dirtySymbols.size > 32) {
+    dirtySymbols.clear();
+  }
+
+  pruneRedisPaperLakeCache(aggressive);
+  pruneCommentaryCache(aggressive);
+  pruneAgentMemory(aggressive);
+  prunePionexAndNewsCaches(aggressive);
+  trimTerminalEngineMemory(aggressive);
+  pruneGoogleTtsCache(aggressive);
+  pruneStudioBroadcastMemory(aggressive);
+  pruneAgentConvergenceMemory(aggressive);
+
+  // 3. Trigger V8 GC only when explicitly requested (with >=30s cooldown to avoid GC stalls)
+  const now = Date.now();
+  if (forceGc && now - lastGcAt >= 30_000 && typeof (globalThis as any).gc === 'function') {
+    try {
+      lastGcAt = now;
+      (globalThis as any).gc();
+    } catch {}
+  }
+
+  autoSweepsCount += 1;
+  lastSweepAt = now;
+}
+
+function scheduleNonBlockingSweep(aggressive: boolean) {
+  const now = Date.now();
+  if (sweepScheduled || now - lastAsyncSweepAt < 5000) return;
+  sweepScheduled = true;
+  lastAsyncSweepAt = now;
+  setImmediate(() => {
+    sweepScheduled = false;
+    performMemoryHygieneSweep(false, aggressive);
+  });
+}
+
+function captureMemoryTelemetry(recordHistory = false) {
+  const mem = process.memoryUsage();
+  const heapStats = v8.getHeapStatistics();
+  const rssMb = Math.round((mem.rss / (1024 * 1024)) * 10) / 10;
+  const heapUsedMb = Math.round((mem.heapUsed / (1024 * 1024)) * 10) / 10;
+  const heapTotalMb = Math.round((mem.heapTotal / (1024 * 1024)) * 10) / 10;
+  const heapLimitMb = Math.round((heapStats.heap_size_limit / (1024 * 1024)) * 10) / 10;
+  const externalMb = Math.round((mem.external / (1024 * 1024)) * 10) / 10;
+  const arrayBuffersMb = Math.round(((mem.arrayBuffers || 0) / (1024 * 1024)) * 10) / 10;
+  const heapUtilizationPct = heapLimitMb > 0 ? Math.round((heapUsedMb / heapLimitMb) * 1000) / 10 : 0;
+  const eventLoopLagMs = Math.round((elDelayMonitor.mean / 1e6) * 100) / 100;
+  const eventLoopP99Ms = Math.round((elDelayMonitor.percentile(99) / 1e6) * 100) / 100;
+  const now = Date.now();
+
+  if (recordHistory || memoryHistory.length === 0) {
+    memoryHistory.push({
+      timestamp: now,
+      timeFormatted: new Date(now).toLocaleTimeString('de-DE', { hour12: false }),
+      rssMb,
+      heapUsedMb,
+    });
+    if (memoryHistory.length > 60) {
+      memoryHistory.shift();
+    }
+  }
+
+  // Non-blocking adaptive hygiene trigger when heap utilization exceeds 70% or thresholds breach
+  if (heapUtilizationPct > 70 || heapUsedMb > 220 || rssMb > 550) {
+    scheduleNonBlockingSweep(heapUtilizationPct > 80 || heapUsedMb > 320);
+  }
+
+  const status: 'OPTIMAL' | 'ELEVATED' | 'CRITICAL' =
+    heapUtilizationPct > 82 || rssMb > 700 || heapUsedMb > 350
+      ? 'CRITICAL'
+      : heapUtilizationPct > 65 || rssMb > 480 || heapUsedMb > 200
+      ? 'ELEVATED'
+      : 'OPTIMAL';
+
+  const lakeMeta = getRedisLakeMeta();
+  const agentStats = getAgentMemoryStats();
+  const pionexStats = getPionexMemoryStats();
+
+  return {
+    timestamp: now,
+    uptimeSec: Math.floor(process.uptime()),
+    rssMb,
+    heapUsedMb,
+    heapTotalMb,
+    heapLimitMb,
+    heapUtilizationPct,
+    externalMb,
+    arrayBuffersMb,
+    eventLoopLagMs,
+    eventLoopP99Ms,
+    wsClientsCount: wsPort1000Clients.size,
+    swarmWsClientsCount: swarmWsClients.size,
+    sseClientsCount: sseClients.size,
+    krakenWsStatus,
+    autoSweepsCount,
+    lastSweepAt,
+    status,
+    memoryGuard: {
+      lakeBooksCount: lakeMeta.booksCount,
+      maxLakeBooks: lakeMeta.maxBooksInMemory,
+      commentaryCacheCount: getCommentaryCacheSize(),
+      idempotencyCount: agentStats.idempotencyCount,
+      externalChronicleIdsCount: pionexStats.externalChronicleIdsCount,
+    },
+    history: memoryHistory,
+  };
+}
+
+// Sample memory and run hygiene check every 15 seconds for 24/7 operation
+captureMemoryTelemetry(true);
+setInterval(() => {
+  performMemoryHygieneSweep(false, false);
+  captureMemoryTelemetry(true);
+  elDelayMonitor.reset();
+}, 15000).unref();
 
 // --- API ROUTES FIRST ---
 
 app.get('/api/health', (req: Request, res: Response) => {
+  const mem = captureMemoryTelemetry(false);
   res.json({
     status: 'ok',
     krakenStatus: krakenWsStatus,
     messagesReceived: krakenMessagesReceived,
     clientsConnected: sseClients.size,
+    memory: {
+      rssMb: mem.rssMb,
+      heapUsedMb: mem.heapUsedMb,
+      heapUtilizationPct: mem.heapUtilizationPct,
+      eventLoopLagMs: mem.eventLoopLagMs,
+      uptimeSec: mem.uptimeSec,
+      status: mem.status,
+    },
   });
+});
+
+app.get('/api/system/memory', (req: Request, res: Response) => {
+  res.json(captureMemoryTelemetry(false));
+});
+
+app.post('/api/system/gc-sweep', (req: Request, res: Response) => {
+  performMemoryHygieneSweep(true, true);
+  res.json(captureMemoryTelemetry(true));
 });
 
 // Snapshot of all markets
@@ -785,8 +1089,19 @@ app.get('/api/kraken/status', (req: Request, res: Response) => {
   });
 });
 
-// Real-time Server-Sent Events (SSE) Stream
+// Real-time Server-Sent Events (SSE) Stream (Hardened against client stalls & connection leaks)
+const MAX_SSE_CLIENTS = 100;
 app.get('/api/kraken/stream', (req: Request, res: Response) => {
+  if (sseClients.size >= MAX_SSE_CLIENTS) {
+    const oldestClient = sseClients.values().next().value;
+    if (oldestClient) {
+      sseClients.delete(oldestClient);
+      try {
+        oldestClient.end();
+      } catch {}
+    }
+  }
+
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache, no-transform');
   res.setHeader('Connection', 'keep-alive');
@@ -804,15 +1119,24 @@ app.get('/api/kraken/stream', (req: Request, res: Response) => {
 
   sseClients.add(res);
 
-  // Keep-alive heartbeat every 15s
+  // Keep-alive heartbeat every 15s with backpressure guard
   const heartbeat = setInterval(() => {
-    res.write(`: keepalive ${Date.now()}\n\n`);
+    if (res.writableEnded || res.destroyed || (res as any).writableNeedDrain) return;
+    try {
+      res.write(`: keepalive ${Date.now()}\n\n`);
+    } catch {
+      cleanup();
+    }
   }, 15000);
 
-  req.on('close', () => {
+  const cleanup = () => {
     clearInterval(heartbeat);
     sseClients.delete(res);
-  });
+  };
+
+  req.on('close', cleanup);
+  res.on('close', cleanup);
+  res.on('error', cleanup);
 });
 
 // Force reconnect trigger (useful for sandbox recovery or user diagnostics)
@@ -988,6 +1312,7 @@ app.post('/api/v1/swarm/stop', (req: Request, res: Response) => {
     durationFormatted: 'Session beendet',
   };
   swarmBotsHistory.unshift(finishedBot);
+  if (swarmBotsHistory.length > 50) swarmBotsHistory.length = 50;
 
   // 3. Frontend über WebSocket informieren, dass der Bot weg ist
   const broadcastPayload = {
@@ -1125,6 +1450,579 @@ app.post('/api/cmc/refresh', async (req: Request, res: Response) => {
   }
 });
 
+// 3c. Live Voice-Out Broadcast Commentary Generator (Gemini 4 Hydrogen + DE Anchor Fallback)
+app.post('/api/commentary/generate', async (req: Request, res: Response) => {
+  try {
+    const result = await generateLiveAnchorCommentary(req.body);
+    res.json(result);
+  } catch (err: any) {
+    const message = err?.message || 'Live-Kommentar-Generierung fehlgeschlagen.';
+    const status = message.includes('ausgeschlossen') || message.includes('Ungültige') ? 400 : 500;
+    res.status(status).json({ error: message });
+  }
+});
+
+// 3d. Pionex USDT Universe Scanner & Yahoo/MSN Finance Live News
+app.get('/api/pionex/universe', async (req: Request, res: Response) => {
+  try {
+    const force = req.query.force === '1' || req.query.force === 'true';
+    const payload = await scanPionexUniverse(force);
+    res.json(payload);
+  } catch (err: any) {
+    res.status(500).json({
+      error: err?.message || 'Pionex Universum-Scan fehlgeschlagen.',
+    });
+  }
+});
+
+app.post('/api/pionex/scan', async (_req: Request, res: Response) => {
+  try {
+    const payload = await scanPionexUniverse(true);
+    res.json(payload);
+  } catch (err: any) {
+    res.status(500).json({
+      error: err?.message || 'Manueller Pionex-Scan fehlgeschlagen.',
+    });
+  }
+});
+
+app.get('/api/news/finance', async (req: Request, res: Response) => {
+  try {
+    const force = req.query.force === '1' || req.query.force === 'true';
+    const payload = await fetchFinanceNewsFeed(force);
+    res.json(payload);
+  } catch (err: any) {
+    res.status(500).json({
+      error: err?.message || 'Yahoo & MSN Finance News Abruf fehlgeschlagen.',
+    });
+  }
+});
+
+// 3e. Google Natural Voices (@google/genai) & qwentts.cpp Backend TTS Bridge
+app.get('/api/tts/status', async (req: Request, res: Response) => {
+  try {
+    const force = req.query.force === '1' || req.query.force === 'true';
+    const status = await getQwenTtsStatus(force);
+    res.json({
+      ...status,
+      googleTts: getGoogleTtsStatus(),
+    });
+  } catch (err: any) {
+    res.status(500).json({
+      error: err?.message || 'TTS Statusabfrage fehlgeschlagen.',
+    });
+  }
+});
+
+app.get('/api/tts/voices', async (_req: Request, res: Response) => {
+  try {
+    const status = await getQwenTtsStatus(false);
+    res.json({
+      reachable: status.reachable,
+      speakers: status.speakers,
+      registeredVoices: status.registeredVoices,
+      googleTts: getGoogleTtsStatus(),
+    });
+  } catch (err: any) {
+    res.status(500).json({
+      error: err?.message || 'TTS Stimmen-Abruf fehlgeschlagen.',
+    });
+  }
+});
+
+app.post('/api/tts/google', async (req: Request, res: Response) => {
+  try {
+    const { text, voice, style } = req.body || {};
+    const result = await synthesizeWithGoogleTts({ text, voice, style });
+    if (result.ok === false) {
+      res.status(result.statusCode).json({
+        fallback: 'BROWSER',
+        reason: result.reason,
+      });
+      return;
+    }
+    res.setHeader('Content-Type', result.contentType);
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('X-TTS-Provider', 'google-natural');
+    res.setHeader('X-TTS-Voice', result.voiceName);
+    res.send(result.audioBuffer);
+  } catch (err: any) {
+    res.status(502).json({
+      fallback: 'BROWSER',
+      reason: err?.message || 'Google Natural Voice Synthese fehlgeschlagen.',
+    });
+  }
+});
+
+app.post('/api/tts/synthesize', async (req: Request, res: Response) => {
+  try {
+    const { text, voice, language, seed, provider, style } = req.body || {};
+    if (provider === 'GOOGLE') {
+      const googleRes = await synthesizeWithGoogleTts({ text, voice, style });
+      if (googleRes.ok === false) {
+        res.status(googleRes.statusCode).json({
+          fallback: 'BROWSER',
+          reason: googleRes.reason,
+        });
+        return;
+      }
+      res.setHeader('Content-Type', googleRes.contentType);
+      res.setHeader('Cache-Control', 'no-store');
+      res.setHeader('X-TTS-Provider', 'google-natural');
+      res.setHeader('X-TTS-Voice', googleRes.voiceName);
+      res.send(googleRes.audioBuffer);
+      return;
+    }
+
+    const result = await synthesizeWithQwenTts({ text, voice, language, seed });
+    if (result.ok === false) {
+      res.status(503).json({
+        fallback: 'BROWSER',
+        reason: result.reason,
+      });
+      return;
+    }
+    res.setHeader('Content-Type', result.contentType);
+    res.setHeader('Cache-Control', 'no-store');
+    res.send(result.audioBuffer);
+  } catch (err: any) {
+    res.status(503).json({
+      fallback: 'BROWSER',
+      reason: err?.message || 'TTS Synthese nicht verfügbar.',
+    });
+  }
+});
+
+app.post('/api/tts/register-voice', async (req: Request, res: Response) => {
+  try {
+    const { name, refText, wavB64, spkB64, rvqB64 } = req.body || {};
+    const out = await registerQwenClonedVoice({ name, refText, wavB64, spkB64, rvqB64 });
+    res.status(out.ok ? 200 : 503).json(out);
+  } catch (err: any) {
+    res.status(500).json({
+      ok: false,
+      message: err?.message || 'Stimm-Registrierung fehlgeschlagen.',
+    });
+  }
+});
+
+// 3f. 30-Minute Key Takeaway Report & TV Studio Live Chat Q&A (Built-In + YouTube Live)
+async function buildStudioMarketSnapshot(activeSymbol?: string) {
+  const screener = getScreenerScheduleStatus();
+  const [cmc, pionex, news] = await Promise.all([
+    getCmcIntelligenceData(getKrakenMarketPrice, false),
+    scanPionexUniverse(false),
+    fetchFinanceNewsFeed(false),
+  ]);
+  return {
+    activeSymbol,
+    screener,
+    cmc,
+    pionex,
+    news,
+  };
+}
+
+app.get('/api/studio/key-takeaway', (_req: Request, res: Response) => {
+  res.json(getLatestKeyTakeawayState());
+});
+
+app.post('/api/studio/key-takeaway', async (req: Request, res: Response) => {
+  try {
+    const activeSymbol = typeof req.body?.activeSymbol === 'string' ? req.body.activeSymbol : 'BTC/USD';
+    const snapshot = await buildStudioMarketSnapshot(activeSymbol);
+    const report = await generate30MinKeyTakeaway(snapshot);
+    res.json({
+      report,
+      ...getLatestKeyTakeawayState(),
+    });
+  } catch (err: any) {
+    res.status(500).json({
+      error: err?.message || '30-Minuten Key Takeaway Bericht fehlgeschlagen.',
+    });
+  }
+});
+
+app.get('/api/studio/chat', async (req: Request, res: Response) => {
+  try {
+    const stateBefore = getStudioChatState();
+    const shouldPoll =
+      stateBefore.youtubeConnected &&
+      (req.query.poll === '1' || Date.now() - (stateBefore.lastPollAt || 0) >= 4000);
+    if (shouldPoll) {
+      await pollYoutubeLiveChat();
+    }
+    res.json(getStudioChatState());
+  } catch (err: any) {
+    res.status(500).json({
+      error: err?.message || 'Studio Live-Chat Abruf fehlgeschlagen.',
+    });
+  }
+});
+
+app.post('/api/studio/chat/message', (req: Request, res: Response) => {
+  try {
+    const { author, text } = req.body || {};
+    const message = addBuiltInStudioChatMessage(author, text);
+    res.json({
+      message,
+      state: getStudioChatState(),
+    });
+  } catch (err: any) {
+    res.status(400).json({
+      error: err?.message || 'Chat-Nachricht ungültig.',
+    });
+  }
+});
+
+app.post('/api/studio/chat/youtube/connect', async (req: Request, res: Response) => {
+  try {
+    const { urlOrId } = req.body || {};
+    const state = await connectYoutubeLiveChat(urlOrId);
+    res.json(state);
+  } catch (err: any) {
+    res.status(400).json({
+      error: err?.message || 'YouTube Live-Chat Verbindung fehlgeschlagen.',
+    });
+  }
+});
+
+app.post('/api/studio/chat/youtube/disconnect', (_req: Request, res: Response) => {
+  res.json(disconnectYoutubeLiveChat());
+});
+
+app.post('/api/studio/chat/auto-answer', (req: Request, res: Response) => {
+  setStudioAutoAnswer(Boolean(req.body?.enabled));
+  res.json(getStudioChatState());
+});
+
+app.post('/api/studio/chat/reply', async (req: Request, res: Response) => {
+  try {
+    const messageId = typeof req.body?.messageId === 'string' ? req.body.messageId : '';
+    const activeSymbol = typeof req.body?.activeSymbol === 'string' ? req.body.activeSymbol : 'BTC/USD';
+    if (!messageId) {
+      res.status(400).json({ error: 'messageId ist erforderlich.' });
+      return;
+    }
+    const snapshot = await buildStudioMarketSnapshot(activeSymbol);
+    const updated = await generateLiveChatQaReply(messageId, snapshot);
+    res.json({
+      message: updated,
+      state: getStudioChatState(),
+    });
+  } catch (err: any) {
+    const msg = err?.message || 'Q&A Antwort konnte nicht generiert werden.';
+    res.status(msg.includes('nicht gefunden') ? 404 : 500).json({ error: msg });
+  }
+});
+
+// 3g. Hybrid 5-Agent Market Convergence & Risk-Capped Paper Book Auto-Execution
+app.get('/api/agents/convergence', (_req: Request, res: Response) => {
+  res.json(getAgentConvergenceState());
+});
+
+app.post('/api/agents/convergence/config', (req: Request, res: Response) => {
+  const updated = updateAgentExecutionConfig(req.body || {});
+  res.json({
+    config: updated,
+    state: getAgentConvergenceState(),
+  });
+});
+
+app.post('/api/agents/convergence/evaluate', async (req: Request, res: Response) => {
+  try {
+    const activeSymbol =
+      typeof req.body?.activeSymbol === 'string' && req.body.activeSymbol.trim()
+        ? req.body.activeSymbol.trim().toUpperCase()
+        : 'BTC/USD';
+    const teleprompterScript =
+      typeof req.body?.teleprompterScript === 'string' ? req.body.teleprompterScript : '';
+    const rawTrigger = String(req.body?.trigger || 'MANUAL').toUpperCase();
+    const trigger: AgentConvergenceTrigger =
+      rawTrigger === 'TELEPROMPTER' ||
+      rawTrigger === 'RVOL_SPIKE' ||
+      rawTrigger === 'MACRO_EVENT'
+        ? rawTrigger
+        : 'MANUAL';
+
+    const snapshot = await buildStudioMarketSnapshot(activeSymbol);
+    const decision = await evaluateAgentConvergence({
+      activeSymbol,
+      teleprompterScript,
+      trigger,
+      screener: snapshot.screener,
+      cmc: snapshot.cmc,
+      pionex: snapshot.pionex,
+      news: snapshot.news,
+      livePriceGetter: getKrakenMarketPrice,
+    });
+
+    const cfg = getAgentExecutionConfig();
+    if (decision.tradeSetup && !decision.riskCorsetVetoed && cfg.autoExecuteEnabled) {
+      const setup = decision.tradeSetup;
+      const nowMs = Date.now();
+      const timeFormatted = new Date(nowMs).toLocaleTimeString('de-DE', { hour12: false });
+
+      const buildRecord = (
+        status: 'EXECUTED' | 'SKIPPED' | 'BLOCKED',
+        reason: string,
+        side: 'buy' | 'sell' = setup.direction === 'LONG' ? 'buy' : 'sell',
+        vol = 0,
+        costUsd = 0,
+        idSuffix = 'SKIP'
+      ): AgentPaperExecutionRecord => ({
+        id: `AG-EX-${nowMs}-${idSuffix}`,
+        decisionId: decision.id,
+        timestamp: nowMs,
+        timeFormatted,
+        symbol: setup.symbol,
+        side,
+        direction: setup.direction,
+        price: setup.entryPrice,
+        vol,
+        costUsd,
+        stopLoss: setup.stopLoss,
+        takeProfit: setup.takeProfit,
+        status,
+        reason,
+      });
+
+      if (decision.convergencePct < cfg.minConvergencePct) {
+        const rec = buildRecord(
+          'SKIPPED',
+          `Konvergenz ${decision.convergencePct}% unter Schwellenwert ${cfg.minConvergencePct}%.`
+        );
+        decision.executionRecord = rec;
+        recordAgentExecution(rec);
+      } else if (!paperExecutionBridge.enabled) {
+        const rec = buildRecord('BLOCKED', 'Paper Execution Bridge deaktiviert.');
+        decision.executionRecord = rec;
+        recordAgentExecution(rec);
+      } else {
+        const cooldown = canExecuteSymbolCooldown(setup.symbol);
+        if (!cooldown.allowed) {
+          const rec = buildRecord(
+            'SKIPPED',
+            `Symbol-Cooldown aktiv (${cooldown.remainingSec}s verbleibend).`
+          );
+          decision.executionRecord = rec;
+          recordAgentExecution(rec);
+        } else {
+          const sid = resolveStrategyIdInput(req.body?.strategyId);
+          const reqCapNum = Number(req.body?.initialCapital);
+          const defaultCap =
+            Number.isFinite(reqCapNum) && reqCapNum >= 10
+              ? reqCapNum
+              : PAPER_BOOK_DEFAULT_CAPITAL;
+          const book = getOrCreateStrategyPaperBook(sid, defaultCap);
+          const cleanPair = setup.symbol.toUpperCase().trim();
+          const existingPos = book.positions.find((p) => p.pair === cleanPair);
+
+          if (setup.direction === 'LONG') {
+            if (!existingPos && book.positions.length >= MAX_CONCURRENT_TRADES_HARD_CAP) {
+              const rec = buildRecord(
+                'BLOCKED',
+                `Maximal ${MAX_CONCURRENT_TRADES_HARD_CAP} gleichzeitige Trades erreicht.`
+              );
+              decision.executionRecord = rec;
+              recordAgentExecution(rec);
+            } else {
+              const riskBudgetUsd = Math.max(
+                10,
+                Math.min(
+                  book.cash * 0.95,
+                  (Math.max(book.initial_balance, book.current_value) * cfg.maxRiskPctPerTrade) / 100
+                )
+              );
+              const execPrice = setup.entryPrice > 0 ? setup.entryPrice : getKrakenMarketPrice(cleanPair);
+              const volDecimals =
+                execPrice >= 10000 ? 6 : execPrice >= 100 ? 4 : execPrice >= 1 ? 3 : execPrice >= 0.01 ? 2 : 0;
+              const orderVol = Math.max(
+                0.000001,
+                Number((riskBudgetUsd / Math.max(0.0000001, execPrice)).toFixed(volDecimals))
+              );
+              const cost = Number((orderVol * execPrice).toFixed(2));
+              const fee = Number((cost * 0.0016).toFixed(2));
+
+              if (cost < 10 || cost + fee > book.cash + 0.01) {
+                const rec = buildRecord(
+                  'BLOCKED',
+                  `Paper-Cash zu gering ($${book.cash.toFixed(2)} verfügbar, $${(cost + fee).toFixed(2)} benötigt).`
+                );
+                decision.executionRecord = rec;
+                recordAgentExecution(rec);
+              } else {
+                const txid = `PAPER-AG-${nowMs}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
+                book.cash = Math.max(0, Number((book.cash - (cost + fee)).toFixed(2)));
+                if (existingPos) {
+                  const totalVol = Number((existingPos.vol + orderVol).toFixed(volDecimals));
+                  const totalCost = Number((existingPos.cost + cost).toFixed(2));
+                  existingPos.entry_price = Number((totalCost / totalVol).toPrecision(6));
+                  existingPos.vol = totalVol;
+                  existingPos.volume = totalVol;
+                  existingPos.cost = totalCost;
+                  existingPos.current_price = execPrice;
+                  existingPos.txid = txid;
+                } else {
+                  book.positions.push({
+                    pair: cleanPair,
+                    type: 'buy',
+                    side: 'LONG',
+                    vol: orderVol,
+                    volume: orderVol,
+                    cost,
+                    entry_price: execPrice,
+                    current_price: execPrice,
+                    unrealized_pnl: 0,
+                    unrealized_pnl_pct: 0,
+                    opened_at: nowMs,
+                    opened_at_formatted: timeFormatted,
+                    txid,
+                  });
+                }
+
+                book.trades_count++;
+                book.history.unshift({
+                  txid,
+                  time: nowMs,
+                  pair: cleanPair,
+                  type: 'buy',
+                  price: execPrice,
+                  vol: orderVol,
+                  cost,
+                  fee,
+                  status: 'filled',
+                });
+                if (book.history.length > 100) book.history.length = 100;
+
+                setStrategyPaperBracket(sid, cleanPair, {
+                  entryPrice: execPrice,
+                  stopLossPrice: setup.stopLoss,
+                  takeProfitPrice: setup.takeProfit,
+                  isBreakEven: false,
+                  side: 'LONG',
+                });
+
+                const syncedBook = syncStrategyBookWithMarket(book);
+                mirrorBookToCliLedger(syncedBook);
+                paperExecutionBridge.totalOrdersBridged++;
+                paperExecutionBridge.totalVolumeBridgedUsd += cost;
+                const cliCommand = `kraken paper buy ${cleanPair} ${orderVol} --price ${execPrice}`;
+                pushJournalEntry({
+                  id: `JRN-AG-${nowMs}`,
+                  timestamp: nowMs,
+                  text: `[5-AGENTEN AUTO-EXEC: ${syncedBook.strategyId}] BUY ${orderVol} ${cleanPair} @ $${execPrice} (Konv. ${decision.convergencePct}% · SL ${setup.stopLossStr} · TP ${setup.takeProfitStr})`,
+                  txid,
+                  command: cliCommand,
+                });
+
+                const wsPayload = JSON.stringify({
+                  type: 'PAPER_BRIDGE_EXECUTED',
+                  payload: {
+                    strategyId: syncedBook.strategyId,
+                    redisKey: syncedBook.redisKey,
+                    txid,
+                    signalId: decision.id,
+                    cliCommand,
+                    pair: cleanPair,
+                    side: 'buy',
+                    volume: orderVol,
+                    price: execPrice,
+                    cost,
+                    fee,
+                    newNav: syncedBook.current_value,
+                    cash: syncedBook.cash,
+                    timestamp: nowMs,
+                  },
+                });
+                for (const client of swarmWsClients) {
+                  if (client.readyState === WebSocket.OPEN) client.send(wsPayload);
+                }
+
+                const rec = buildRecord(
+                  'EXECUTED',
+                  `LONG ausgeführt (${cfg.maxRiskPctPerTrade}% Cap · SL/TP Bracket gesetzt)`,
+                  'buy',
+                  orderVol,
+                  cost,
+                  'FILL'
+                );
+                decision.executionRecord = rec;
+                recordAgentExecution(rec);
+              }
+            }
+          } else if (existingPos) {
+            // SHORT convergence closes an open LONG position cleanly with realized PnL
+            const sellVol = existingPos.vol;
+            const execPrice = setup.entryPrice > 0 ? setup.entryPrice : getKrakenMarketPrice(cleanPair);
+            const proceeds = Number((sellVol * execPrice).toFixed(2));
+            const fee = Number((proceeds * 0.0016).toFixed(2));
+            const realized = Number(((execPrice - existingPos.entry_price) * sellVol - fee).toFixed(2));
+            const txid = `PAPER-AG-${nowMs}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
+
+            book.cash = Number((book.cash + proceeds - fee).toFixed(2));
+            book.realized_pnl = Number((book.realized_pnl + realized).toFixed(2));
+            book.positions = book.positions.filter((p) => p.pair !== cleanPair);
+            deleteStrategyPaperBracket(sid, cleanPair);
+            book.trades_count++;
+            book.history.unshift({
+              txid,
+              time: nowMs,
+              pair: cleanPair,
+              type: 'sell',
+              price: execPrice,
+              vol: sellVol,
+              cost: proceeds,
+              fee,
+              status: 'filled',
+            });
+            if (book.history.length > 100) book.history.length = 100;
+
+            const syncedBook = syncStrategyBookWithMarket(book);
+            mirrorBookToCliLedger(syncedBook);
+            const cliCommand = `kraken paper sell ${cleanPair} ${sellVol} --price ${execPrice}`;
+            pushJournalEntry({
+              id: `JRN-AG-${nowMs}`,
+              timestamp: nowMs,
+              text: `[5-AGENTEN AUTO-CLOSE: ${syncedBook.strategyId}] SELL ${sellVol} ${cleanPair} @ $${execPrice} (Realized: $${realized.toFixed(2)})`,
+              txid,
+              command: cliCommand,
+            });
+
+            const rec = buildRecord(
+              'EXECUTED',
+              `Offene LONG-Position bei SHORT-Konvergenz geschlossen (PnL $${realized.toFixed(2)})`,
+              'sell',
+              sellVol,
+              proceeds,
+              'CLOSE'
+            );
+            decision.executionRecord = rec;
+            recordAgentExecution(rec);
+          } else {
+            const rec = buildRecord(
+              'SKIPPED',
+              'SHORT-Konvergenz erkannt — Spot Paper Book führt nur LONG-Einstiege & LONG-Schließungen.',
+              'sell'
+            );
+            decision.executionRecord = rec;
+            recordAgentExecution(rec);
+          }
+        }
+      }
+    }
+
+    res.json({
+      decision,
+      state: getAgentConvergenceState(),
+    });
+  } catch (err: any) {
+    res.status(500).json({
+      error: err?.message || 'Multi-Agenten Konvergenz-Auswertung fehlgeschlagen.',
+    });
+  }
+});
+
 // =========================================================================
 // KRAKEN CLI & KRAKEN PRO ROUTING & ORCHESTRATOR ENGINE (MASTER-PLAN SOT)
 // =========================================================================
@@ -1238,40 +2136,70 @@ const KRAKEN_TRADABLE_PAIRS: Record<string, { altname: string; wsname: string; b
 };
 
 function getKrakenMarketPrice(pairOrSymbol: string): number {
-  if (!pairOrSymbol) return 77.58;
+  if (!pairOrSymbol) return 91450;
   const raw = pairOrSymbol.toUpperCase().trim();
 
-  // Normalize to canonical symbol key used in marketsState
-  let canonical = raw.replace('.P', '').replace('XXBT', 'BTC').replace('XETH', 'ETH').replace('ZUSD', 'USD');
-  if (canonical.includes('BTC') || canonical.includes('XBT')) canonical = 'BTC/USD';
-  else if (canonical.includes('ETH')) canonical = 'ETH/USD';
-  else if (canonical.includes('SOL')) canonical = 'SOL/USD';
-  else if (canonical.includes('HYPE')) canonical = 'HYPE/USD';
-  else if (canonical.includes('NIO')) canonical = 'NIO/USD';
-  else if (!canonical.includes('/')) canonical = `${canonical}/USD`;
-
-  if (marketsState[canonical] && typeof marketsState[canonical].lastPrice === 'number' && marketsState[canonical].lastPrice > 0) {
-    return marketsState[canonical].lastPrice;
-  }
+  // 1. Direct match in live WebSocket/REST marketsState
   if (marketsState[raw] && typeof marketsState[raw].lastPrice === 'number' && marketsState[raw].lastPrice > 0) {
     return marketsState[raw].lastPrice;
   }
 
-  // Fallbacks with accurate market baselines (Kraken live feed parity)
-  const norm = raw.replace('/', '').replace('.P', '').replace('XXBT', 'BTC').replace('ZUSD', 'USD').replace('XETH', 'ETH');
-  if (norm.includes('BTC') || norm.includes('XBT')) return marketsState['BTC/USD']?.lastPrice || 77087.95;
-  if (norm.includes('ETH')) return marketsState['ETH/USD']?.lastPrice || 2485.86;
-  if (norm.includes('SOL')) return marketsState['SOL/USD']?.lastPrice || 100.40;
-  if (norm.includes('HYPE')) return marketsState['HYPE/USD']?.lastPrice || 77.58;
-  if (norm.includes('NIO')) return marketsState['NIO/USD']?.lastPrice || 5.82;
-  if (norm.includes('AVAX')) return 26.80;
-  if (norm.includes('XRP')) return 2.15;
-  if (norm.includes('DOT')) return 7.45;
-  if (norm.includes('LINK')) return 16.20;
-  if (norm.includes('ADA')) return 0.78;
-  if (norm.includes('DOGE')) return 0.245;
-  if (norm.includes('SUI')) return 3.25;
-  return 77.58;
+  // 2. Match against 7-Provider Scheduled Screener Universe (26 instruments incl. CMC & DEX pairs)
+  try {
+    const screener = getScreenerScheduleStatus();
+    if (screener && Array.isArray(screener.tickers)) {
+      const exactTicker = screener.tickers.find(
+        (t) =>
+          t.symbol.toUpperCase() === raw ||
+          t.symbol.toUpperCase().replace(/\.P$/, '') === raw.replace(/\.P$/, '')
+      );
+      if (exactTicker && exactTicker.price > 0) {
+        return exactTicker.price;
+      }
+    }
+  } catch {
+    // Screener not yet initialized on early boot
+  }
+
+  // 3. Canonical Kraken pair lookup (only when base asset matches, never overriding BONK/SOL or BRETT/ETH)
+  const baseAsset = raw.split('/')[0].replace(/\.P$/, '').replace(/USDT$/, '').replace(/USD$/, '');
+  if (baseAsset === 'BTC' || baseAsset === 'XBT' || baseAsset === 'XXBT') {
+    return marketsState['BTC/USD']?.lastPrice || 91450;
+  }
+  if (baseAsset === 'ETH' || baseAsset === 'XETH') {
+    return marketsState['ETH/USD']?.lastPrice || 2740;
+  }
+  if (baseAsset === 'SOL') {
+    return marketsState['SOL/USD']?.lastPrice || 188.5;
+  }
+  if (baseAsset === 'HYPE') {
+    return marketsState['HYPE/USD']?.lastPrice || 26.4;
+  }
+  if (baseAsset === 'NIO') {
+    return marketsState['NIO/USD']?.lastPrice || 5.82;
+  }
+  if (baseAsset === 'AVAX') return 33.8;
+  if (baseAsset === 'XRP') return 1.48;
+  if (baseAsset === 'LINK') return 18.25;
+  if (baseAsset === 'ADA') return 0.785;
+  if (baseAsset === 'DOGE') return 0.365;
+  if (baseAsset === 'SUI') return 3.24;
+  if (baseAsset === 'TON') return 5.64;
+  if (baseAsset === 'RENDER') return 7.82;
+  if (baseAsset === 'TAO') return 518.0;
+  if (baseAsset === 'ONDO') return 1.08;
+  if (baseAsset === 'WIF') return 3.18;
+  if (baseAsset === 'BONK') return 0.0000384;
+  if (baseAsset === 'PEPE') return 0.0000195;
+  if (baseAsset === 'BRETT') return 0.164;
+  if (baseAsset === 'AERO') return 1.42;
+  if (baseAsset === 'CAKE') return 2.48;
+  if (baseAsset === 'ZEC') return 44.2;
+  if (baseAsset === 'NVDA') return 138.6;
+  if (baseAsset === 'AAPL') return 228.4;
+  if (baseAsset === 'EUR') return 1.0542;
+  if (baseAsset === 'XAU') return 2685.0;
+  return 100.0;
 }
 
 // Authoritatively register live price provider into Kraken 181 Leaf Executor
@@ -1360,19 +2288,106 @@ const krakenCliState: KrakenCliState = {
 
 function syncPaperLedgerWithMarket() {
   if (!krakenCliState || !krakenCliState.paperLedger) return;
+
+  // Hard guard: prune any position with missing or zero volume so a 0-volume position can never exist or show PnL
+  krakenCliState.paperLedger.positions = krakenCliState.paperLedger.positions.filter(
+    (pos) => Number(pos.vol ?? pos.volume ?? 0) > 0
+  );
+
   let totalPositionCurrentValue = 0;
+  const nowMs = Date.now();
   for (const pos of krakenCliState.paperLedger.positions) {
+    const validVol = Number(pos.vol ?? pos.volume ?? 0);
+    pos.vol = validVol;
+    pos.volume = validVol;
+    pos.side = pos.side || (pos.type === 'sell' ? 'SHORT' : 'LONG');
+    if (!pos.opened_at) {
+      pos.opened_at = nowMs;
+    }
+    if (!pos.opened_at_formatted) {
+      pos.opened_at_formatted = new Date(pos.opened_at).toLocaleTimeString('de-DE', {
+        hour12: false,
+      });
+    }
+
     const livePrice = getKrakenMarketPrice(pos.pair);
     pos.current_price = livePrice;
     const diff = livePrice - pos.entry_price;
-    pos.unrealized_pnl = Number((diff * pos.vol * (pos.type === 'buy' ? 1 : -1)).toFixed(2));
-    pos.unrealized_pnl_pct = pos.cost > 0 ? Number(((pos.unrealized_pnl / pos.cost) * 100).toFixed(2)) : 0;
-    totalPositionCurrentValue += pos.vol * livePrice;
+    pos.unrealized_pnl = Number((diff * validVol * (pos.type === 'buy' ? 1 : -1)).toFixed(2));
+    pos.unrealized_pnl_pct =
+      pos.cost > 0 ? Number(((pos.unrealized_pnl / pos.cost) * 100).toFixed(2)) : 0;
+    totalPositionCurrentValue += validVol * livePrice;
   }
-  const totalUnrealized = krakenCliState.paperLedger.positions.reduce((acc, p) => acc + p.unrealized_pnl, 0);
+  const totalUnrealized = krakenCliState.paperLedger.positions.reduce(
+    (acc, p) => acc + p.unrealized_pnl,
+    0
+  );
   krakenCliState.paperLedger.unrealized_pnl = Number(totalUnrealized.toFixed(2));
-  krakenCliState.paperLedger.total_pnl = Number((krakenCliState.paperLedger.realized_pnl + krakenCliState.paperLedger.unrealized_pnl).toFixed(2));
-  krakenCliState.paperLedger.current_value = Number((krakenCliState.paperLedger.cash + totalPositionCurrentValue).toFixed(2));
+  krakenCliState.paperLedger.total_pnl = Number(
+    (krakenCliState.paperLedger.realized_pnl + krakenCliState.paperLedger.unrealized_pnl).toFixed(2)
+  );
+  krakenCliState.paperLedger.current_value = Number(
+    (krakenCliState.paperLedger.cash + totalPositionCurrentValue).toFixed(2)
+  );
+}
+
+function resolveStrategyIdInput(rawId?: unknown): string {
+  if (typeof rawId === 'string' && rawId.trim().length > 0) {
+    return sanitizeStrategyId(rawId);
+  }
+  const store = loadPersistentStrategyStore();
+  return sanitizeStrategyId(store.activeStrategyId || 'default');
+}
+
+function mirrorBookToCliLedger(book: StrategyPaperBook): void {
+  if (!krakenCliState) return;
+  krakenCliState.paperLedger = {
+    current_value: book.current_value,
+    initial_balance: book.initial_balance,
+    cash: book.cash,
+    unrealized_pnl: book.unrealized_pnl,
+    realized_pnl: book.realized_pnl,
+    total_pnl: book.total_pnl,
+    trades_count: book.trades_count,
+    positions: book.positions as any[],
+    history: book.history as any[],
+    openOrders: book.openOrders || [],
+  };
+}
+
+function syncStrategyBookWithMarket(book: StrategyPaperBook): StrategyPaperBook {
+  book.positions = (book.positions || []).filter(
+    (pos) => Number(pos.vol ?? pos.volume ?? 0) > 0
+  );
+
+  let totalPositionCurrentValue = 0;
+  const nowMs = Date.now();
+  for (const pos of book.positions) {
+    const validVol = Number(pos.vol ?? pos.volume ?? 0);
+    pos.vol = validVol;
+    pos.volume = validVol;
+    pos.side = pos.side || (pos.type === 'sell' ? 'SHORT' : 'LONG');
+    if (!pos.opened_at) pos.opened_at = nowMs;
+    if (!pos.opened_at_formatted) {
+      pos.opened_at_formatted = new Date(pos.opened_at).toLocaleTimeString('de-DE', {
+        hour12: false,
+      });
+    }
+
+    const livePrice = getKrakenMarketPrice(pos.pair);
+    pos.current_price = livePrice;
+    const diff = livePrice - pos.entry_price;
+    pos.unrealized_pnl = Number((diff * validVol * (pos.type === 'buy' ? 1 : -1)).toFixed(2));
+    pos.unrealized_pnl_pct =
+      pos.cost > 0 ? Number(((pos.unrealized_pnl / pos.cost) * 100).toFixed(2)) : 0;
+    totalPositionCurrentValue += validVol * livePrice;
+  }
+
+  const totalUnrealized = book.positions.reduce((acc, p) => acc + p.unrealized_pnl, 0);
+  book.unrealized_pnl = Number(totalUnrealized.toFixed(2));
+  book.total_pnl = Number((book.realized_pnl + book.unrealized_pnl).toFixed(2));
+  book.current_value = Number((book.cash + totalPositionCurrentValue).toFixed(2));
+  return saveStrategyPaperBook(book);
 }
 
 /**
@@ -2125,6 +3140,32 @@ app.get('/api/kraken/cli/inventory', (req: Request, res: Response) => {
   });
 });
 
+// Audit Journal In-Memory Store
+interface KrakenJournalEntry {
+  id: string;
+  timestamp: number;
+  text: string;
+  botId?: string;
+  txid?: string;
+  command?: string;
+}
+
+const krakenCliJournal: KrakenJournalEntry[] = [
+  {
+    id: `JRN-${Date.now() - 180000}`,
+    timestamp: Date.now() - 180000,
+    text: '[System Engine] Kraken CLI 0.3.2 Master-Orchestrator online. 150+ spezialisierte Quant Tools & Cursor Skills registriert. Paper-Ledger synchronisiert.',
+  },
+];
+(globalThis as any).krakenCliJournal = krakenCliJournal;
+
+function pushJournalEntry(entry: KrakenJournalEntry) {
+  krakenCliJournal.unshift(entry);
+  if (krakenCliJournal.length > 100) {
+    krakenCliJournal.length = 100;
+  }
+}
+
 // Autonomous Situation-Cycle (Master-Plan Requirement #5)
 app.post('/api/kraken/cli/situation-cycle', async (req: Request, res: Response) => {
   const mode = krakenCliState.tradingMode === 'paper' ? 'PAPER' : 'LIVE';
@@ -2237,7 +3278,7 @@ app.post('/api/kraken/cli/situation-cycle', async (req: Request, res: Response) 
     timestamp: Date.now(),
     text: `[Situation Cycle ${cycleId}] Mode: ${mode} | Obs Capital: $${bookObserved.available_capital.toLocaleString()} | Pair: ${candidate.symbol} | Action: ${action} | CLI Exec: ${actResult.executedVia} | TXID: ${actResult.txid || 'N/A'} | New NAV: $${actResult.newCurrentValue.toLocaleString()}`,
   };
-  krakenCliJournal.unshift(journalEntry);
+  pushJournalEntry(journalEntry);
 
   res.json({
     cycleId,
@@ -2255,24 +3296,6 @@ app.post('/api/kraken/cli/situation-cycle', async (req: Request, res: Response) 
     journalEntry,
   });
 });
-
-// Audit Journal In-Memory Store
-interface KrakenJournalEntry {
-  id: string;
-  timestamp: number;
-  text: string;
-  botId?: string;
-  txid?: string;
-  command?: string;
-}
-
-const krakenCliJournal: KrakenJournalEntry[] = [
-  {
-    id: `JRN-${Date.now() - 180000}`,
-    timestamp: Date.now() - 180000,
-    text: '[System Engine] Kraken CLI 0.3.2 Master-Orchestrator online. 150+ spezialisierte Quant Tools & Cursor Skills registriert. Paper-Ledger synchronisiert.',
-  },
-];
 
 app.get('/api/kraken/cli/journal', (req: Request, res: Response) => {
   res.json(krakenCliJournal.slice(0, 100));
@@ -2354,7 +3377,7 @@ app.post('/api/kraken/cli/tools/execute', async (req: Request, res: Response) =>
     });
 
     const journalMsg = `[Skill: create_dca_bot] Initialized ${name} (${newBotId}) | Pair: ${pair} | Range: $${dcaRangeMin}-$${dcaRangeMax} | Initial Order: ${cliCommand} | TXID: ${txid}`;
-    krakenCliJournal.unshift({
+    pushJournalEntry({
       id: `JRN-${Date.now()}`,
       timestamp: Date.now(),
       text: journalMsg,
@@ -2529,6 +3552,9 @@ app.post('/api/kraken/cli/bot-order', async (req: Request, res: Response) => {
       fee,
       status: 'filled',
     });
+    if (krakenCliState.paperLedger.history.length > 100) {
+      krakenCliState.paperLedger.history.length = 100;
+    }
   } else {
     const orderSide = side === 'sell' ? 'sell' : 'buy';
     cliCommand = `kraken --yes order ${orderSide} ${cleanPair} ${orderVol} --price ${orderPrice}`;
@@ -2559,7 +3585,7 @@ app.post('/api/kraken/cli/bot-order', async (req: Request, res: Response) => {
     txid,
     command: cliCommand,
   };
-  krakenCliJournal.unshift(jEntry);
+  pushJournalEntry(jEntry);
 
   // Broadcast to WebSocket clients
   const wsPayload = JSON.stringify({
@@ -2667,18 +3693,33 @@ const balanceMigrationState = {
   lastReconciliation: new Date().toISOString(),
 };
 
-// --- TASK 1: PAPER EXECUTION BRIDGE ENDPOINTS ---
-app.get('/api/kraken/cli/paper-bridge/status', (req: Request, res: Response) => {
+// --- TASK 1: PAPER EXECUTION BRIDGE ENDPOINTS (SCOPED PER STRATEGY VIA REDIS PAPER LAKE) ---
+app.get('/api/kraken/cli/paper-bridge/status', async (req: Request, res: Response) => {
+  const sid = resolveStrategyIdInput(req.query.strategyId);
+  const reqCapNum = Number(req.query.initialCapital);
+  const defaultCap =
+    Number.isFinite(reqCapNum) && reqCapNum >= 10 ? reqCapNum : PAPER_BOOK_DEFAULT_CAPITAL;
+
+  await hydrateStrategyBookFromExternalRedis(sid);
+  const book = getOrCreateStrategyPaperBook(sid, defaultCap);
+  const synced = syncStrategyBookWithMarket(book);
+  mirrorBookToCliLedger(synced);
+
   res.json({
     ...paperExecutionBridge,
+    strategyId: synced.strategyId,
+    redisKey: synced.redisKey,
+    lakeInfo: getRedisLakeMeta(),
     paperLedger: {
-      current_value: krakenCliState.paperLedger.current_value,
-      cash: krakenCliState.paperLedger.cash,
-      unrealized_pnl: krakenCliState.paperLedger.unrealized_pnl,
-      realized_pnl: krakenCliState.paperLedger.realized_pnl,
-      trades_count: krakenCliState.paperLedger.trades_count,
-      positions_count: krakenCliState.paperLedger.positions.length,
-      positions: krakenCliState.paperLedger.positions,
+      current_value: synced.current_value,
+      initial_balance: synced.initial_balance,
+      cash: synced.cash,
+      unrealized_pnl: synced.unrealized_pnl,
+      realized_pnl: synced.realized_pnl,
+      trades_count: synced.trades_count,
+      positions_count: synced.positions.length,
+      positions: synced.positions,
+      brackets: synced.brackets || {},
     },
   });
 });
@@ -2697,6 +3738,120 @@ app.post('/api/kraken/cli/paper-bridge/toggle', (req: Request, res: Response) =>
   });
 });
 
+app.post('/api/kraken/cli/paper-bridge/reset', (req: Request, res: Response) => {
+  const sid = resolveStrategyIdInput(req.body?.strategyId);
+  const reqCap = Number(req.body?.initialCapital);
+  const resetCap =
+    Number.isFinite(reqCap) && reqCap >= 10 && reqCap <= 10000000
+      ? Math.round(reqCap * 100) / 100
+      : PAPER_BOOK_DEFAULT_CAPITAL;
+
+  const fresh = resetStrategyPaperBook(sid, resetCap);
+  mirrorBookToCliLedger(fresh);
+
+  pushJournalEntry({
+    id: `JRN-RESET-${Date.now()}`,
+    timestamp: Date.now(),
+    text: `[PAPER BOOK RESET] Strategy "${sid}" (${fresh.redisKey}) reset to $${fresh.initial_balance.toFixed(2)}.`,
+    command: `kraken paper reset --balance ${fresh.initial_balance}`,
+  });
+
+  res.json({
+    success: true,
+    strategyId: fresh.strategyId,
+    redisKey: fresh.redisKey,
+    lakeInfo: getRedisLakeMeta(),
+    paperLedger: {
+      current_value: fresh.current_value,
+      initial_balance: fresh.initial_balance,
+      cash: fresh.cash,
+      unrealized_pnl: fresh.unrealized_pnl,
+      realized_pnl: fresh.realized_pnl,
+      trades_count: fresh.trades_count,
+      positions_count: 0,
+      positions: [],
+      brackets: {},
+    },
+  });
+});
+
+app.post('/api/kraken/cli/paper-bridge/capital', (req: Request, res: Response) => {
+  const sid = resolveStrategyIdInput(req.body?.strategyId);
+  const reqCap = Number(req.body?.initialCapital);
+  if (!Number.isFinite(reqCap) || reqCap < 10 || reqCap > 10000000) {
+    return res.status(400).json({
+      error: 'Startkapital muss zwischen $10.00 und $10,000,000.00 liegen.',
+    });
+  }
+
+  const updated = updateStrategyPaperBookCapital(sid, reqCap);
+  const synced = syncStrategyBookWithMarket(updated);
+  mirrorBookToCliLedger(synced);
+
+  // Keep strategy store synchronized
+  const store = loadPersistentStrategyStore();
+  const idx = store.strategies.findIndex((s) => sanitizeStrategyId(s.id) === sid);
+  if (idx >= 0) {
+    store.strategies[idx] = {
+      ...store.strategies[idx],
+      initialCapital: synced.initial_balance,
+      updatedAt: Date.now(),
+    };
+    savePersistentStrategyStore(store);
+  }
+
+  res.json({
+    success: true,
+    strategyId: synced.strategyId,
+    redisKey: synced.redisKey,
+    paperLedger: {
+      current_value: synced.current_value,
+      initial_balance: synced.initial_balance,
+      cash: synced.cash,
+      unrealized_pnl: synced.unrealized_pnl,
+      realized_pnl: synced.realized_pnl,
+      trades_count: synced.trades_count,
+      positions_count: synced.positions.length,
+      positions: synced.positions,
+      brackets: synced.brackets || {},
+    },
+  });
+});
+
+app.post('/api/kraken/cli/paper-bridge/bracket', (req: Request, res: Response) => {
+  const sid = resolveStrategyIdInput(req.body?.strategyId);
+  const pair = String(req.body?.pair || '').toUpperCase().trim();
+  const bracket = req.body?.bracket;
+
+  if (!pair) {
+    return res.status(400).json({ error: 'pair is required' });
+  }
+
+  if (bracket === null) {
+    const updated = deleteStrategyPaperBracket(sid, pair);
+    return res.json({ success: true, brackets: updated.brackets });
+  }
+
+  if (
+    !bracket ||
+    !Number.isFinite(Number(bracket.entryPrice)) ||
+    !Number.isFinite(Number(bracket.stopLossPrice)) ||
+    !Number.isFinite(Number(bracket.takeProfitPrice))
+  ) {
+    return res.status(400).json({ error: 'Invalid bracket payload' });
+  }
+
+  const updated = setStrategyPaperBracket(sid, pair, {
+    entryPrice: Number(bracket.entryPrice),
+    stopLossPrice: Number(bracket.stopLossPrice),
+    takeProfitPrice: Number(bracket.takeProfitPrice),
+    isBreakEven: Boolean(bracket.isBreakEven),
+    side: bracket.side === 'SHORT' ? 'SHORT' : 'LONG',
+  });
+
+  res.json({ success: true, brackets: updated.brackets });
+});
+
 app.post('/api/kraken/cli/paper-bridge/execute', async (req: Request, res: Response) => {
   const startTime = Date.now();
   if (!paperExecutionBridge.enabled) {
@@ -2710,80 +3865,119 @@ app.post('/api/kraken/cli/paper-bridge/execute', async (req: Request, res: Respo
     signalId,
     symbol = 'BTC/USD',
     side = 'buy',
-    sizeUsd = 2000,
+    sizeUsd = 50,
     price: reqPrice,
     executionRoute = 'DIRECT_DMA',
-    strategyId = 'strat_swarm',
+    strategyId: rawStrategyId,
     strategyName = 'The Swarm Alpha',
+    initialCapital: reqInitialCapital,
   } = req.body;
 
-  // Normalize Pair
-  let cleanPair = symbol.replace(/\.P$/, '').replace('/USDT', '/USD');
-  if (!cleanPair.includes('/')) cleanPair = `${cleanPair}/USD`;
+  const sid = resolveStrategyIdInput(rawStrategyId);
+  const reqCapNum = Number(reqInitialCapital);
+  const defaultCap =
+    Number.isFinite(reqCapNum) && reqCapNum >= 10 ? reqCapNum : PAPER_BOOK_DEFAULT_CAPITAL;
+  const book = getOrCreateStrategyPaperBook(sid, defaultCap);
 
+  const cleanPair = String(symbol || 'BTC/USD').toUpperCase().trim();
   const mktPrice = getKrakenMarketPrice(cleanPair);
-  const execPrice = reqPrice && reqPrice > 0 ? reqPrice : mktPrice;
-  const rawVol = sizeUsd / execPrice;
-  const volDecimals = cleanPair.includes('BTC') ? 4 : cleanPair.includes('ETH') ? 3 : 2;
-  const orderVol = Math.max(0.0001, Number(rawVol.toFixed(volDecimals)));
+  const execPrice = reqPrice && Number(reqPrice) > 0 ? Number(reqPrice) : mktPrice;
+
+  // Dynamic volume decimals based on price magnitude so volume is never rounded to 0
+  const volDecimals =
+    execPrice >= 10000
+      ? 6
+      : execPrice >= 100
+      ? 4
+      : execPrice >= 1
+      ? 3
+      : execPrice >= 0.01
+      ? 2
+      : 0;
+  const rawVol = Math.max(10, Number(sizeUsd) || 50) / Math.max(0.0000001, execPrice);
+  const orderVol = Math.max(0.000001, Number(rawVol.toFixed(volDecimals)));
   const cost = Number((orderVol * execPrice).toFixed(2));
   const fee = Number((cost * 0.0016).toFixed(2));
 
-  const txid = `PAPER-${Date.now()}-${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
+  const nowMs = Date.now();
+  const timeFormatted = new Date(nowMs).toLocaleTimeString('de-DE', { hour12: false });
+  const txid = `PAPER-${nowMs}-${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
   const cliCommand = `kraken paper ${side.toLowerCase()} ${cleanPair} ${orderVol} --price ${execPrice}`;
 
-  // Apply to Paper Ledger Source of Truth (Enforcing MAX 20 Concurrent Trades Cap)
+  // Apply to Strategy's Isolated Paper Book (Enforcing MAX 20 Concurrent Trades Cap & Cash Bound)
   if (side.toLowerCase() === 'buy') {
-    const existingPos = krakenCliState.paperLedger.positions.find((p) => p.pair === cleanPair);
-    if (!existingPos && krakenCliState.paperLedger.positions.length >= MAX_CONCURRENT_TRADES_HARD_CAP) {
+    const existingPos = book.positions.find((p) => p.pair === cleanPair);
+    if (!existingPos && book.positions.length >= MAX_CONCURRENT_TRADES_HARD_CAP) {
       return res.status(403).json({
-        error: `Maximal ${MAX_CONCURRENT_TRADES_HARD_CAP} gleichzeitige Trades erreicht (${krakenCliState.paperLedger.positions.length}/${MAX_CONCURRENT_TRADES_HARD_CAP}). Bitte schließe zuerst eine offene Position.`,
+        error: `Maximal ${MAX_CONCURRENT_TRADES_HARD_CAP} gleichzeitige Trades erreicht (${book.positions.length}/${MAX_CONCURRENT_TRADES_HARD_CAP}). Bitte schließe zuerst eine offene Position.`,
         code: 'MAX_20_TRADES_CAP_REACHED',
       });
     }
-    krakenCliState.paperLedger.cash = Math.max(0, krakenCliState.paperLedger.cash - (cost + fee));
+    if (cost + fee > book.cash + 0.01) {
+      return res.status(400).json({
+        error: `Nicht genügend Paper-Cash im Book "${book.strategyId}" ($${book.cash.toFixed(2)} verfügbar, $${(cost + fee).toFixed(2)} benötigt).`,
+        code: 'INSUFFICIENT_PAPER_CASH',
+      });
+    }
+    book.cash = Math.max(0, Number((book.cash - (cost + fee)).toFixed(2)));
     if (existingPos) {
-      const totalVol = existingPos.vol + orderVol;
-      const totalCost = existingPos.cost + cost;
-      existingPos.entry_price = Number((totalCost / totalVol).toFixed(2));
+      const totalVol = Number((existingPos.vol + orderVol).toFixed(volDecimals));
+      const totalCost = Number((existingPos.cost + cost).toFixed(2));
+      existingPos.entry_price = Number((totalCost / totalVol).toPrecision(6));
       existingPos.vol = totalVol;
+      existingPos.volume = totalVol;
       existingPos.cost = totalCost;
       existingPos.current_price = execPrice;
+      existingPos.txid = txid;
     } else {
-      krakenCliState.paperLedger.positions.push({
+      book.positions.push({
         pair: cleanPair,
         type: 'buy',
+        side: 'LONG',
         vol: orderVol,
+        volume: orderVol,
         cost,
         entry_price: execPrice,
         current_price: execPrice,
         unrealized_pnl: 0,
         unrealized_pnl_pct: 0,
+        opened_at: nowMs,
+        opened_at_formatted: timeFormatted,
+        txid,
       });
     }
   } else {
-    // Sell
-    krakenCliState.paperLedger.cash += (cost - fee);
-    const existingPos = krakenCliState.paperLedger.positions.find((p) => p.pair === cleanPair);
-    if (existingPos) {
-      existingPos.vol = Math.max(0, existingPos.vol - orderVol);
-      if (existingPos.vol <= 0) {
-        krakenCliState.paperLedger.positions = krakenCliState.paperLedger.positions.filter((p) => p.pair !== cleanPair);
+    // Sell / Close position
+    const existingPos = book.positions.find((p) => p.pair === cleanPair);
+    if (!existingPos) {
+      return res.status(400).json({
+        error: `Keine offene Paper-Position für ${cleanPair} im Book "${book.strategyId}" zum Schließen vorhanden.`,
+        code: 'NO_OPEN_POSITION',
+      });
+    }
+    const sellVol = Math.min(existingPos.vol, orderVol);
+    const sellProceeds = Number((sellVol * execPrice).toFixed(2));
+    const sellFee = Number((sellProceeds * 0.0016).toFixed(2));
+    const realized = Number(((execPrice - existingPos.entry_price) * sellVol - sellFee).toFixed(2));
+
+    book.cash = Number((book.cash + sellProceeds - sellFee).toFixed(2));
+    book.realized_pnl = Number((book.realized_pnl + realized).toFixed(2));
+
+    const remainingVol = Number((existingPos.vol - sellVol).toFixed(volDecimals));
+    if (remainingVol <= 0.000001) {
+      book.positions = book.positions.filter((p) => p.pair !== cleanPair);
+      if (book.brackets[cleanPair]) {
+        delete book.brackets[cleanPair];
       }
+    } else {
+      existingPos.vol = remainingVol;
+      existingPos.volume = remainingVol;
+      existingPos.cost = Number((remainingVol * existingPos.entry_price).toFixed(2));
     }
   }
 
-  krakenCliState.paperLedger.trades_count++;
-
-  // Authoritative revaluation
-  let posValue = 0;
-  for (const pos of krakenCliState.paperLedger.positions) {
-    posValue += pos.vol * getKrakenMarketPrice(pos.pair);
-  }
-  krakenCliState.paperLedger.current_value = Number((krakenCliState.paperLedger.cash + posValue).toFixed(2));
-
-  // Record trade history
-  krakenCliState.paperLedger.history.unshift({
+  book.trades_count++;
+  book.history.unshift({
     txid,
     time: Date.now(),
     pair: cleanPair,
@@ -2794,6 +3988,12 @@ app.post('/api/kraken/cli/paper-bridge/execute', async (req: Request, res: Respo
     fee,
     status: 'filled',
   });
+  if (book.history.length > 100) {
+    book.history.length = 100;
+  }
+
+  const syncedBook = syncStrategyBookWithMarket(book);
+  mirrorBookToCliLedger(syncedBook);
 
   const durationMs = Date.now() - startTime;
   paperExecutionBridge.totalOrdersBridged++;
@@ -2813,7 +4013,7 @@ app.post('/api/kraken/cli/paper-bridge/execute', async (req: Request, res: Respo
   paperExecutionBridge.avgLatencyMs = Number(((paperExecutionBridge.avgLatencyMs * 0.9) + (durationMs * 0.1)).toFixed(2));
 
   // Journal entry
-  const journalText = `[PAPER BRIDGE] ${side.toUpperCase()} ${orderVol} ${cleanPair} @ $${execPrice.toLocaleString()} | TXID: ${txid} | Route: ${executionRoute} | Strat: ${strategyName} | Nav: $${krakenCliState.paperLedger.current_value.toLocaleString()}`;
+  const journalText = `[PAPER BOOK: ${syncedBook.strategyId}] ${side.toUpperCase()} ${orderVol} ${cleanPair} @ $${execPrice.toLocaleString()} | TXID: ${txid} | Strat: ${strategyName} | Nav: $${syncedBook.current_value.toLocaleString()}`;
   const jEntry: KrakenJournalEntry = {
     id: `JRN-PB-${Date.now()}`,
     timestamp: Date.now(),
@@ -2821,12 +4021,14 @@ app.post('/api/kraken/cli/paper-bridge/execute', async (req: Request, res: Respo
     txid,
     command: cliCommand,
   };
-  krakenCliJournal.unshift(jEntry);
+  pushJournalEntry(jEntry);
 
   // Broadcast
   const wsPayload = JSON.stringify({
     type: 'PAPER_BRIDGE_EXECUTED',
     payload: {
+      strategyId: syncedBook.strategyId,
+      redisKey: syncedBook.redisKey,
       txid,
       signalId,
       cliCommand,
@@ -2836,8 +4038,8 @@ app.post('/api/kraken/cli/paper-bridge/execute', async (req: Request, res: Respo
       price: execPrice,
       cost,
       fee,
-      newNav: krakenCliState.paperLedger.current_value,
-      cash: krakenCliState.paperLedger.cash,
+      newNav: syncedBook.current_value,
+      cash: syncedBook.cash,
       timestamp: Date.now(),
     },
   });
@@ -2847,6 +4049,8 @@ app.post('/api/kraken/cli/paper-bridge/execute', async (req: Request, res: Respo
 
   res.json({
     success: true,
+    strategyId: syncedBook.strategyId,
+    redisKey: syncedBook.redisKey,
     txid,
     cliCommand,
     executedVia: 'kraken paper ' + side.toLowerCase(),
@@ -2858,10 +4062,11 @@ app.post('/api/kraken/cli/paper-bridge/execute', async (req: Request, res: Respo
     cost,
     fee,
     authoritativeLedger: {
-      current_value: krakenCliState.paperLedger.current_value,
-      cash: krakenCliState.paperLedger.cash,
-      trades_count: krakenCliState.paperLedger.trades_count,
-      positions: krakenCliState.paperLedger.positions,
+      current_value: syncedBook.current_value,
+      initial_balance: syncedBook.initial_balance,
+      cash: syncedBook.cash,
+      trades_count: syncedBook.trades_count,
+      positions: syncedBook.positions,
     },
     journalText,
   });
@@ -2894,7 +4099,7 @@ app.post('/api/kraken/cli/sot/cleanup', (req: Request, res: Response) => {
 
   // Audit journal log
   const auditLog = `[SOT RECONCILIATION] Cleaned homemade state drift. Locked to kraken paper status (0.4.1). NAV: $${krakenCliState.paperLedger.current_value.toLocaleString()} | Cash: $${krakenCliState.paperLedger.cash.toLocaleString()} | Positions: ${krakenCliState.paperLedger.positions.length}`;
-  krakenCliJournal.unshift({
+  pushJournalEntry({
     id: `JRN-SOT-${Date.now()}`,
     timestamp: Date.now(),
     text: auditLog,
@@ -3094,7 +4299,7 @@ app.post('/api/kraken/cli/balance/migrate', (req: Request, res: Response) => {
   balanceMigrationState.lastReconciliation = new Date().toISOString();
 
   // Audit log
-  krakenCliJournal.unshift({
+  pushJournalEntry({
     id: `JRN-MIGRATE-${Date.now()}`,
     timestamp: Date.now(),
     text: `[BALANCE MIGRATION] All system portfolios and KPI meters locked directly to Kraken CLI balance (${krakenCliState.tradingMode.toUpperCase()} mode).`,
@@ -3172,7 +4377,7 @@ app.post('/api/kraken/cli/tasks/execute-all', async (req: Request, res: Response
   };
 
   // Log unified event to journal
-  krakenCliJournal.unshift({
+  pushJournalEntry({
     id: `JRN-ALL4-${Date.now()}`,
     timestamp: Date.now(),
     text: '[4 TASKS EXECUTED] Paper Bridge Active | Homemade SoT Cleaned | CLI Proxy Registry Mounted (181 leaves) | Balance Migrated to CLI.',
@@ -3357,6 +4562,30 @@ app.post('/api/screener/run-now', (req: Request, res: Response) => {
   res.json(status);
 });
 
+// 3b. CoinMarketCap (CMC) Market Intelligence, Ranked Screener, DEX On-Chain & Exchange Liquidity
+app.get('/api/cmc/intelligence', async (req: Request, res: Response) => {
+  try {
+    const force = req.query.force === '1' || req.query.force === 'true';
+    const payload = await getCmcIntelligenceData(getKrakenMarketPrice, force);
+    res.json(payload);
+  } catch (err: any) {
+    res.status(500).json({
+      error: err.message || 'CoinMarketCap Intelligence Abruf fehlgeschlagen.',
+    });
+  }
+});
+
+app.post('/api/cmc/refresh', async (req: Request, res: Response) => {
+  try {
+    const payload = await refreshCmcIntelligenceData(getKrakenMarketPrice);
+    res.json(payload);
+  } catch (err: any) {
+    res.status(500).json({
+      error: err.message || 'CoinMarketCap Refresh fehlgeschlagen.',
+    });
+  }
+});
+
 // 4. Persistent Strategy & Result Store Endpoints
 app.get('/api/strategies', (req: Request, res: Response) => {
   const store = loadPersistentStrategyStore();
@@ -3388,6 +4617,10 @@ app.post('/api/strategies', (req: Request, res: Response) => {
     activeStrategyId: activeStrategyId || strategy?.id || store.activeStrategyId,
   });
 
+  if (strategy?.id && Number.isFinite(Number(strategy.initialCapital))) {
+    updateStrategyPaperBookCapital(strategy.id, Number(strategy.initialCapital));
+  }
+
   res.json({
     success: true,
     store: saved,
@@ -3411,34 +4644,57 @@ app.delete('/api/strategies/:id', (req: Request, res: Response) => {
   });
 });
 
-// 5. Emergency Kill Switch (Cancel All Open Orders & Flatten All Open Paper Positions)
+// 5. Emergency Kill Switch (Cancel All Open Orders & Flatten Open Paper Positions)
 app.post('/api/terminal/emergency-flatten', async (req: Request, res: Response) => {
-  const closedCount = krakenCliState.paperLedger.positions.length;
-  const cancelledOrders = krakenCliState.paperLedger.openOrders.length;
+  const reqSid = req.body?.strategyId;
+  const targetBooks =
+    typeof reqSid === 'string' && reqSid.trim().length > 0
+      ? [getOrCreateStrategyPaperBook(sanitizeStrategyId(reqSid))]
+      : listAllStrategyPaperBooks();
 
-  let liquidatedValue = 0;
-  for (const pos of krakenCliState.paperLedger.positions) {
-    const price = getKrakenMarketPrice(pos.pair);
-    liquidatedValue += pos.vol * price;
+  let closedCount = 0;
+  let cancelledOrders = 0;
+  let lastFlattenedBook: StrategyPaperBook | null = null;
+
+  for (const book of targetBooks) {
+    closedCount += book.positions.length;
+    cancelledOrders += book.openOrders.length;
+    let liquidatedValue = 0;
+    for (const pos of book.positions) {
+      const price = getKrakenMarketPrice(pos.pair);
+      liquidatedValue += pos.vol * price;
+    }
+    book.cash = Number((book.cash + liquidatedValue).toFixed(2));
+    book.current_value = book.cash;
+    book.unrealized_pnl = 0;
+    book.positions = [];
+    book.openOrders = [];
+    book.brackets = {};
+    lastFlattenedBook = saveStrategyPaperBook(book);
   }
 
-  krakenCliState.paperLedger.cash = Number((krakenCliState.paperLedger.cash + liquidatedValue).toFixed(2));
-  krakenCliState.paperLedger.current_value = krakenCliState.paperLedger.cash;
-  krakenCliState.paperLedger.unrealized_pnl = 0;
-  krakenCliState.paperLedger.positions = [];
-  krakenCliState.paperLedger.openOrders = [];
+  if (lastFlattenedBook) {
+    mirrorBookToCliLedger(lastFlattenedBook);
+  } else {
+    krakenCliState.paperLedger.positions = [];
+    krakenCliState.paperLedger.openOrders = [];
+    krakenCliState.paperLedger.unrealized_pnl = 0;
+    krakenCliState.paperLedger.current_value = krakenCliState.paperLedger.cash;
+  }
 
-  krakenCliJournal.unshift({
+  const activeLedger = lastFlattenedBook || krakenCliState.paperLedger;
+
+  pushJournalEntry({
     id: `JRN-KILL-${Date.now()}`,
     timestamp: Date.now(),
-    text: `[EMERGENCY KILL SWITCH] Flattened ${closedCount} open positions and cancelled ${cancelledOrders} orders. Paper Account Cash: $${krakenCliState.paperLedger.cash.toFixed(2)} (0/${MAX_CONCURRENT_TRADES_HARD_CAP} active trades).`,
+    text: `[EMERGENCY KILL SWITCH] Flattened ${closedCount} open positions and cancelled ${cancelledOrders} orders (${typeof reqSid === 'string' && reqSid ? `Book: ${reqSid}` : 'All Books'}). Cash: $${activeLedger.cash.toFixed(2)} (0/${MAX_CONCURRENT_TRADES_HARD_CAP} active trades).`,
   });
 
   res.json({
     success: true,
     closedPositionsCount: closedCount,
     cancelledOrdersCount: cancelledOrders,
-    paperLedger: krakenCliState.paperLedger,
+    paperLedger: activeLedger,
     message: `Notfall-Glattstellung ausgeführt: ${closedCount} Positionen geschlossen, ${cancelledOrders} Orders storniert. Aktive Trades: 0 / ${MAX_CONCURRENT_TRADES_HARD_CAP}.`,
   });
 });
@@ -3464,8 +4720,10 @@ async function startServer() {
     bootstrapKrakenTickerRest().catch((e) => console.warn('[Ticker Bootstrap]', e));
     bootstrapKrakenDepthRest();
     connectKrakenWebSocket();
-    // Initialize persistent strategy store & start automated scheduled multi-source screener across all 6 sources
+    // Initialize persistent strategy store & start automated scheduled multi-source screener across all sources
     loadPersistentStrategyStore();
+    void scanPionexUniverse(false).catch(() => {});
+    void fetchFinanceNewsFeed(false).catch(() => {});
     runScheduledScreenerCycle(getKrakenMarketPrice);
     configureScreenerSchedule({ enabled: true, intervalSec: 15 }, getKrakenMarketPrice);
     // Run Kraken CLI startup verification and balance routing for the orchestrator
@@ -3597,6 +4855,7 @@ async function startServer() {
               durationFormatted: 'Session beendet',
             };
             swarmBotsHistory.unshift(finishedBot);
+            if (swarmBotsHistory.length > 50) swarmBotsHistory.length = 50;
             console.log(`[Swarm WS] STOP_BOT verarbeitet für ${removedBot.id} (${reason})`);
 
             const broadcastMsg = JSON.stringify({
@@ -3625,9 +4884,11 @@ async function startServer() {
     });
   });
 
-  // Periodic TICK_UPDATE broadcaster: Every 1200ms
+  // Fallback micro-ticker for Swarm Bots: Only active when live Kraken stream is disconnected or paused
   setInterval(() => {
     if (swarmWsClients.size === 0) return;
+    // Skip redundant simulated drift when real Kraken live prices are flowing
+    if (krakenWsStatus === 'CONNECTED' && Date.now() - krakenLastMessageAt < 8000) return;
 
     for (const b of swarmBotsServerState) {
       if (b.status !== 'active') continue;
@@ -3663,7 +4924,12 @@ async function startServer() {
       const serialized = JSON.stringify(tickUpdate);
       for (const client of swarmWsClients) {
         if (client.readyState === WebSocket.OPEN) {
-          client.send(serialized);
+          if (client.bufferedAmount > 64 * 1024) continue;
+          try {
+            client.send(serialized);
+          } catch {
+            // ignore
+          }
         }
       }
     }

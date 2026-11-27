@@ -17,8 +17,24 @@
 
 import { KrakenPaperPosition } from '../types/krakenCli';
 
+export interface PaperBookBracketDto {
+  entryPrice: number;
+  stopLossPrice: number;
+  takeProfitPrice: number;
+  isBreakEven: boolean;
+  side: 'LONG' | 'SHORT';
+}
+
 export interface PaperBridgeStatus {
   enabled: boolean;
+  strategyId?: string;
+  redisKey?: string;
+  lakeInfo?: {
+    backend: string;
+    keyPrefix: string;
+    booksCount: number;
+    strategyIds?: string[];
+  };
   totalOrdersBridged: number;
   totalVolumeBridgedUsd: number;
   lastExecution: {
@@ -36,12 +52,14 @@ export interface PaperBridgeStatus {
   avgLatencyMs: number;
   paperLedger: {
     current_value: number;
+    initial_balance?: number;
     cash: number;
     unrealized_pnl: number;
     realized_pnl: number;
     trades_count: number;
     positions_count: number;
     positions: KrakenPaperPosition[];
+    brackets?: Record<string, PaperBookBracketDto>;
   };
 }
 
@@ -169,10 +187,19 @@ export interface OrderExecutionResult {
 // ----------------------------------------------------------------------------
 
 /**
- * Task 1: Fetch Paper Execution Bridge status
+ * Task 1: Fetch Paper Execution Bridge status for a specific Strategy Paper Book
  */
-export async function fetchPaperBridgeStatus(): Promise<PaperBridgeStatus> {
-  const res = await fetch('/api/kraken/cli/paper-bridge/status');
+export async function fetchPaperBridgeStatus(
+  strategyId?: string,
+  initialCapital?: number
+): Promise<PaperBridgeStatus> {
+  const params = new URLSearchParams();
+  if (strategyId) params.set('strategyId', strategyId);
+  if (typeof initialCapital === 'number' && Number.isFinite(initialCapital) && initialCapital >= 10) {
+    params.set('initialCapital', String(initialCapital));
+  }
+  const qs = params.toString();
+  const res = await fetch(`/api/kraken/cli/paper-bridge/status${qs ? `?${qs}` : ''}`);
   if (!res.ok) throw new Error(`Failed to fetch paper bridge status: ${res.statusText}`);
   return res.json();
 }
@@ -203,8 +230,11 @@ export async function executePaperBridgeOrder(params: {
   executionRoute?: string;
   strategyId?: string;
   strategyName?: string;
+  initialCapital?: number;
 }): Promise<{
   success: boolean;
+  strategyId?: string;
+  redisKey?: string;
   txid: string;
   cliCommand: string;
   executedVia: string;
@@ -217,6 +247,7 @@ export async function executePaperBridgeOrder(params: {
   fee: number;
   authoritativeLedger: {
     current_value: number;
+    initial_balance?: number;
     cash: number;
     trades_count: number;
     positions: KrakenPaperPosition[];
@@ -231,6 +262,44 @@ export async function executePaperBridgeOrder(params: {
   if (!res.ok) {
     const errData = await res.json().catch(() => ({}));
     throw new Error(errData.error || `Paper bridge execution failed: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+/**
+ * Sync or update the isolated Strategy Paper Book initial capital in the Redis Data Lake
+ */
+export async function syncStrategyPaperBookCapital(
+  strategyId: string,
+  initialCapital: number
+): Promise<{ success: boolean; strategyId: string; redisKey: string; paperLedger: PaperBridgeStatus['paperLedger'] }> {
+  const res = await fetch('/api/kraken/cli/paper-bridge/capital', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ strategyId, initialCapital }),
+  });
+  if (!res.ok) {
+    const errData = await res.json().catch(() => ({}));
+    throw new Error(errData.error || `Failed to update paper book capital: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+/**
+ * Persist SL/TP/Break-Even bracket into the strategy's isolated Redis Paper Book
+ */
+export async function saveStrategyPaperBracket(
+  strategyId: string,
+  pair: string,
+  bracket: PaperBookBracketDto | null
+): Promise<{ success: boolean }> {
+  const res = await fetch('/api/kraken/cli/paper-bridge/bracket', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ strategyId, pair, bracket }),
+  });
+  if (!res.ok) {
+    return { success: false };
   }
   return res.json();
 }
@@ -534,11 +603,19 @@ export async function paperHistory(): Promise<any[]> {
 }
 
 /**
- * Reset CLI Paper ledger via `kraken paper reset [--balance <amount>]`
+ * Reset CLI Paper ledger via `/api/kraken/cli/paper-bridge/reset` (scoped to strategyId in Redis Data Lake)
  */
-export async function paperReset(balance: number = 1000): Promise<any> {
-  const result = await executeViaProxyRegistry('paper', ['reset', '--balance', String(balance)], {}, 'KRAKEN_CLI_BRIDGE');
-  return result.data;
+export async function paperReset(balance: number = 100, strategyId?: string): Promise<any> {
+  const res = await fetch('/api/kraken/cli/paper-bridge/reset', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ strategyId, initialCapital: balance }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `Paper reset failed: ${res.statusText}`);
+  }
+  return res.json();
 }
 
 // ----------------------------------------------------------------------------

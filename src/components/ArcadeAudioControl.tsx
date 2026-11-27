@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Volume2, VolumeX, Play, Sliders, Radio } from 'lucide-react';
+import { Volume2, VolumeX, Play, Sliders, Radio, Mic, Save, Check } from 'lucide-react';
 import {
   arcadeSoundEngine,
   AudioPreferences,
@@ -7,6 +7,10 @@ import {
   SOUND_CATEGORIES_META,
   ActiveSoundPlaybackEvent,
 } from '../services/arcadeSoundEngine';
+import {
+  voiceCommentatorService,
+  VoiceCommentatorSnapshot,
+} from '../services/voiceCommentatorService';
 
 export const ArcadeAudioControl: React.FC = () => {
   const [prefs, setPrefs] = useState<AudioPreferences>(() =>
@@ -14,11 +18,16 @@ export const ArcadeAudioControl: React.FC = () => {
   );
   const [isOpen, setIsOpen] = useState<boolean>(false);
   const [activeSound, setActiveSound] = useState<ActiveSoundPlaybackEvent | null>(null);
+  const [voiceSnap, setVoiceSnap] = useState<VoiceCommentatorSnapshot>(() =>
+    voiceCommentatorService.getSnapshot()
+  );
   const clearTimerRef = useRef<number | null>(null);
+  const savedTimerRef = useRef<number | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const [savedNotice, setSavedNotice] = useState<boolean>(false);
 
   useEffect(() => {
-    const unsubscribe = arcadeSoundEngine.subscribe((evt) => {
+    const unsubAudio = arcadeSoundEngine.subscribe((evt) => {
       setActiveSound(evt);
       if (clearTimerRef.current) {
         window.clearTimeout(clearTimerRef.current);
@@ -27,11 +36,22 @@ export const ArcadeAudioControl: React.FC = () => {
         setActiveSound(null);
       }, evt.durationMs + 60);
     });
+    const unsubPrefs = arcadeSoundEngine.subscribePreferences((updated) => {
+      setPrefs(updated);
+    });
+    const unsubVoice = voiceCommentatorService.subscribe((snap) => {
+      setVoiceSnap(snap);
+    });
 
     return () => {
-      unsubscribe();
+      unsubAudio();
+      unsubPrefs();
+      unsubVoice();
       if (clearTimerRef.current) {
         window.clearTimeout(clearTimerRef.current);
+      }
+      if (savedTimerRef.current) {
+        window.clearTimeout(savedTimerRef.current);
       }
     };
   }, []);
@@ -83,6 +103,8 @@ export const ArcadeAudioControl: React.FC = () => {
       ? '8-BIT'
       : prefs.pack === 'VIRAL_MEME'
       ? 'MEME'
+      : prefs.pack === 'VOICE_COMMENTATOR'
+      ? 'VOICE'
       : 'HYBRID';
 
   return (
@@ -196,13 +218,13 @@ export const ArcadeAudioControl: React.FC = () => {
             />
           </div>
 
-          {/* Sound Profile Selector */}
+          {/* Sound Profile Selector (5 Styles incl. Live Voice Commentator) */}
           <div className="mb-3">
-            <div className="text-[10px] text-[#8B95A5] mb-1">SOUND-STIL</div>
+            <div className="text-[10px] text-[#8B95A5] mb-1">SOUND-STIL (5 MODI)</div>
             <div className="grid grid-cols-2 gap-1">
               {(
                 [
-                  { id: 'TERMINAL_CHIMES', label: 'DEZENTE CHIMES (EMPFOHLEN)' },
+                  { id: 'TERMINAL_CHIMES', label: 'DEZENTE CHIMES' },
                   { id: '8BIT_MEGAMAN', label: '8-BIT ARCADE NES' },
                   { id: 'VIRAL_MEME', label: 'VIRAL MEME' },
                   { id: 'HYBRID', label: 'HYBRID MIX' },
@@ -221,11 +243,123 @@ export const ArcadeAudioControl: React.FC = () => {
                   {item.label}
                 </button>
               ))}
+              <button
+                type="button"
+                onClick={() => handlePackChange('VOICE_COMMENTATOR')}
+                className={`col-span-2 py-1.5 px-2 text-[9px] font-bold border flex items-center justify-center gap-1.5 whitespace-nowrap transition-colors ${
+                  prefs.pack === 'VOICE_COMMENTATOR'
+                    ? 'bg-[#089981]/20 border-[#089981] text-[#089981]'
+                    : 'bg-[#07090E] border-[#1B2230] text-[#E6EDF3] hover:border-[#089981]/60'
+                }`}
+              >
+                <Mic className="w-3 h-3" />
+                <span>5. LIVE-KOMMENTATOR (CHRONICLE &amp; CMC VOICE)</span>
+              </button>
             </div>
           </div>
 
+          {/* Voice Commentator Settings when 5th Sound Style is active */}
+          {prefs.pack === 'VOICE_COMMENTATOR' && (
+            <div className="mb-3 p-2 bg-[#07090E] border border-[#089981]/40 space-y-2">
+              <div className="flex items-center justify-between text-[9px] text-[#089981]">
+                <span className="font-bold uppercase">GOOGLE NATURAL VOICE / ANCHOR</span>
+                <span>Fills &amp; BT nur Chimes</span>
+              </div>
+              <div className="grid grid-cols-4 gap-1">
+                {(['AUTO', 'GOOGLE_NATURAL', 'QWENTTS', 'BROWSER'] as const).map((mode) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    onClick={() =>
+                      voiceCommentatorService.updatePrefs({ ttsEngineMode: mode })
+                    }
+                    className={`py-0.5 px-1 text-[8px] font-bold border truncate ${
+                      voiceSnap.prefs.ttsEngineMode === mode
+                        ? 'border-[#089981] bg-[#089981]/20 text-[#089981]'
+                        : 'border-[#1B2230] bg-[#0C1017] text-[#8B95A5] hover:text-[#E6EDF3]'
+                    }`}
+                  >
+                    {mode === 'GOOGLE_NATURAL' ? 'GOOGLE' : mode}
+                  </button>
+                ))}
+              </div>
+              {(voiceSnap.prefs.ttsEngineMode === 'AUTO' ||
+                voiceSnap.prefs.ttsEngineMode === 'GOOGLE_NATURAL') && (
+                <select
+                  aria-label="Google Natural Voice wählen"
+                  value={voiceSnap.prefs.googleVoice || 'Kore'}
+                  onChange={(e) =>
+                    voiceCommentatorService.updatePrefs({ googleVoice: e.target.value })
+                  }
+                  className="w-full bg-[#0C1017] border border-[#1B2230] px-1.5 py-1 text-[10px] text-[#E6EDF3] focus:outline-none focus:border-[#089981]"
+                >
+                  {(voiceSnap.ttsStatus?.googleTts?.voices?.length
+                    ? voiceSnap.ttsStatus.googleTts.voices
+                    : [
+                        { id: 'Kore', label: 'Kore · Studio Anchor (Klar)' },
+                        { id: 'Charon', label: 'Charon · Chef-Analyst (Tief)' },
+                        { id: 'Puck', label: 'Puck · Breaking News (Dynamisch)' },
+                        { id: 'Fenrir', label: 'Fenrir · Quant Desk (Kraftvoll)' },
+                        { id: 'Zephyr', label: 'Zephyr · Closing Bell (Warm)' },
+                      ]
+                  ).map((gv) => (
+                    <option key={gv.id} value={gv.id}>
+                      {gv.label}
+                    </option>
+                  ))}
+                </select>
+              )}
+              {voiceSnap.availableVoices.length > 0 && (
+                <select
+                  aria-label="Browser Fallback Sprecherstimme wählen"
+                  value={voiceSnap.prefs.voiceName}
+                  onChange={(e) =>
+                    voiceCommentatorService.updatePrefs({ voiceName: e.target.value })
+                  }
+                  className="w-full bg-[#0C1017] border border-[#1B2230] px-1.5 py-1 text-[10px] text-[#8B95A5] focus:outline-none focus:border-[#00E5FF]"
+                >
+                  {voiceSnap.availableVoices.map((v) => (
+                    <option key={v.name} value={v.name}>
+                      Fallback: {v.name} ({v.lang})
+                    </option>
+                  ))}
+                </select>
+              )}
+              <div className="flex items-center justify-between gap-2 text-[9px] text-[#8B95A5]">
+                <span className="whitespace-nowrap">
+                  Tempo {voiceSnap.prefs.speechRate.toFixed(2)}x
+                </span>
+                <input
+                  type="range"
+                  min={0.85}
+                  max={1.35}
+                  step={0.05}
+                  value={voiceSnap.prefs.speechRate}
+                  onChange={(e) =>
+                    voiceCommentatorService.updatePrefs({
+                      speechRate: parseFloat(e.target.value),
+                    })
+                  }
+                  className="flex-1 accent-[#089981] cursor-pointer h-1 bg-[#0C1017]"
+                />
+                <button
+                  type="button"
+                  onClick={() =>
+                    voiceCommentatorService.speakDirectSentence(
+                      'Hier ist der Live-Desk mit dem aktuellen Markt-Check für den Stream.',
+                      'STIMM-TEST'
+                    )
+                  }
+                  className="px-2 py-0.5 bg-[#089981]/20 border border-[#089981] text-[#089981] font-bold whitespace-nowrap"
+                >
+                  TESTEN
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Background Screener Radar Toggle */}
-          <div className="flex items-center justify-between py-1.5 px-2 mb-3 bg-[#07090E] border border-[#1B2230]">
+          <div className="flex items-center justify-between py-1.5 px-2 mb-2.5 bg-[#07090E] border border-[#1B2230]">
             <div className="flex items-center gap-1.5">
               <Radio className="w-3 h-3 text-[#60A5FA]" />
               <div>
@@ -245,6 +379,32 @@ export const ArcadeAudioControl: React.FC = () => {
               {!prefs.muteBackgroundAlerts ? 'AKTIV' : 'STUMM'}
             </button>
           </div>
+
+          {/* Explicit Save Button for Audio & Voice Settings */}
+          <button
+            type="button"
+            onClick={() => {
+              arcadeSoundEngine.updatePreferences(prefs);
+              voiceCommentatorService.saveAllPreferences();
+              arcadeSoundEngine.play('UI_FEEDBACK', { force: true });
+              setSavedNotice(true);
+              if (savedTimerRef.current) {
+                window.clearTimeout(savedTimerRef.current);
+              }
+              savedTimerRef.current = window.setTimeout(() => {
+                setSavedNotice(false);
+                savedTimerRef.current = null;
+              }, 2000);
+            }}
+            className={`w-full py-1.5 px-2 mb-3 border text-[10px] font-bold flex items-center justify-center gap-1.5 transition-colors ${
+              savedNotice
+                ? 'border-[#10B981] bg-[#10B981]/20 text-[#10B981]'
+                : 'border-[#F59E0B]/60 bg-[#07090E] text-[#F59E0B] hover:bg-[#F59E0B]/15'
+            }`}
+          >
+            {savedNotice ? <Check className="w-3 h-3" /> : <Save className="w-3 h-3" />}
+            <span>{savedNotice ? 'EINSTELLUNGEN GESPEICHERT' : 'EINGESTELLTE WERTE SPEICHERN'}</span>
+          </button>
 
           {/* Interactive Sound Preview Grid */}
           <div className="text-[10px] text-[#8B95A5] mb-1.5 flex items-center justify-between">

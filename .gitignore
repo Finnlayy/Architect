@@ -7,3 +7,4 @@ coverage/
 .env*
 !.env.example
 .hermes/
+.omega_redis_paper_lake.json*

@@ -237,12 +237,17 @@ export interface KrakenWorkspaceResponse {
 export interface KrakenPaperPosition {
   pair: string;
   type: 'buy' | 'sell';
+  side?: 'LONG' | 'SHORT';
   vol: number;
+  volume?: number;
   cost: number;
   entry_price: number;
   current_price: number;
   unrealized_pnl: number;
   unrealized_pnl_pct: number;
+  opened_at?: number;
+  opened_at_formatted?: string;
+  txid?: string;
 }
 
 export interface KrakenPaperStatusResponse {

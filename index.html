@@ -3,6 +3,37 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <script>
+      // Shield against browser extension injection errors (e.g., MetaMask, phantom inpage.js)
+      (function() {
+        function isExtensionError(err, source) {
+          var msg = (err && (err.message || (typeof err === 'string' ? err : ''))) || '';
+          var src = source || (err && (err.filename || err.stack)) || '';
+          return (
+            msg.indexOf('MetaMask') !== -1 ||
+            msg.indexOf('Failed to connect to MetaMask') !== -1 ||
+            src.indexOf('chrome-extension://') !== -1 ||
+            src.indexOf('moz-extension://') !== -1 ||
+            src.indexOf('safari-extension://') !== -1 ||
+            src.indexOf('inpage.js') !== -1
+          );
+        }
+        window.addEventListener('error', function(event) {
+          if (isExtensionError(event.error, event.filename)) {
+            event.preventDefault();
+            event.stopImmediatePropagation();
+            return true;
+          }
+        }, true);
+        window.addEventListener('unhandledrejection', function(event) {
+          if (isExtensionError(event.reason)) {
+            event.preventDefault();
+            event.stopImmediatePropagation();
+            return true;
+          }
+        }, true);
+      })();
+    </script>
     <title>OMEGA NIO - The Judge &amp; The Swarm</title>
     <meta name="description" content="Quantitative trading platform separating Swarm signal generation from The Judge risk allocation, with Google Drive blueprint synchronization and high-frequency execution architecture." />
     <meta property="og:title" content="OMEGA NIO - The Judge &amp; The Swarm" />

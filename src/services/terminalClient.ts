@@ -7,6 +7,18 @@ import {
   BacktestResult,
   ScreenerScheduleStatus,
   CmcIntelligencePayload,
+  CommentaryGenerateRequest,
+  CommentaryGenerateResponse,
+  PionexUniversePayload,
+  FinanceNewsPayload,
+  TtsBackendStatus,
+  KeyTakeawayReport,
+  StudioChatMessage,
+  StudioLiveChatState,
+  AgentConvergenceDecision,
+  AgentConvergenceState,
+  AgentConvergenceTrigger,
+  AgentExecutionConfig,
 } from '../types/terminal';
 
 const LOCAL_STORAGE_KEY = 'omega_nio_terminal_store_v5';
@@ -15,6 +27,7 @@ export interface PersistentTerminalStore {
   strategies: StrategyDefinition[];
   lastResults: Record<string, BacktestResult>;
   activeStrategyId: string;
+  capitalMigratedTo100V1?: boolean;
 }
 
 export const INITIAL_CLIENT_STRATEGIES: StrategyDefinition[] = [
@@ -27,7 +40,7 @@ export const INITIAL_CLIENT_STRATEGIES: StrategyDefinition[] = [
     timeframe: '15m',
     lookbackBars: 240,
     direction: 'BOTH',
-    initialCapital: 1000,
+    initialCapital: 100,
     maxConcurrentTrades: 20,
     riskPerTradePct: 2.0,
     leverage: 5,
@@ -58,7 +71,7 @@ export const INITIAL_CLIENT_STRATEGIES: StrategyDefinition[] = [
     timeframe: '5m',
     lookbackBars: 300,
     direction: 'BOTH',
-    initialCapital: 1000,
+    initialCapital: 100,
     maxConcurrentTrades: 20,
     riskPerTradePct: 2.5,
     leverage: 10,
@@ -89,7 +102,7 @@ export const INITIAL_CLIENT_STRATEGIES: StrategyDefinition[] = [
     timeframe: '1m',
     lookbackBars: 240,
     direction: 'BOTH',
-    initialCapital: 1000,
+    initialCapital: 100,
     maxConcurrentTrades: 20,
     riskPerTradePct: 1.5,
     leverage: 5,
@@ -120,7 +133,7 @@ export const INITIAL_CLIENT_STRATEGIES: StrategyDefinition[] = [
     timeframe: '15m',
     lookbackBars: 240,
     direction: 'BOTH',
-    initialCapital: 1000,
+    initialCapital: 100,
     maxConcurrentTrades: 20,
     riskPerTradePct: 2.0,
     leverage: 5,
@@ -146,12 +159,12 @@ export const INITIAL_CLIENT_STRATEGIES: StrategyDefinition[] = [
     id: 'strat_atr_volatility_breakout',
     name: 'ATR Volatility Breakout Trend',
     templateType: 'ATR_BREAKOUT',
-    idea: 'Volatilitäts-Ausbruch über Mehrkerzen-Struktur mit hartem 20-Trade-Cap und 1.000 $ Paper-Basis',
+    idea: 'Volatilitäts-Ausbruch über Mehrkerzen-Struktur mit hartem 20-Trade-Cap und 100 $ Paper-Basis',
     symbol: 'ETH/USD',
     timeframe: '1h',
     lookbackBars: 240,
     direction: 'BOTH',
-    initialCapital: 1000,
+    initialCapital: 100,
     maxConcurrentTrades: 20,
     riskPerTradePct: 2.0,
     leverage: 5,
@@ -222,8 +235,21 @@ export function loadLocalStore(): PersistentTerminalStore | null {
   try {
     const raw = localStorage.getItem(LOCAL_STORAGE_KEY);
     if (!raw) return null;
-    const parsed = JSON.parse(raw);
+    const parsed = JSON.parse(raw) as PersistentTerminalStore;
     if (parsed && Array.isArray(parsed.strategies) && parsed.strategies.length > 0) {
+      if (!parsed.capitalMigratedTo100V1) {
+        const migrated: PersistentTerminalStore = {
+          ...parsed,
+          strategies: parsed.strategies.map((s) => ({
+            ...s,
+            initialCapital: 100,
+            updatedAt: Date.now(),
+          })),
+          capitalMigratedTo100V1: true,
+        };
+        saveLocalStore(migrated);
+        return migrated;
+      }
       return parsed;
     }
   } catch {
@@ -257,6 +283,7 @@ export function saveLocalStore(store: PersistentTerminalStore): void {
         strategies: cappedStrategies,
         lastResults: prunedResults,
         activeStrategyId: store.activeStrategyId,
+        capitalMigratedTo100V1: true,
       })
     );
   } catch {
@@ -284,12 +311,13 @@ export async function fetchStrategyStore(): Promise<PersistentTerminalStore> {
           strategies: Array.from(mergedMap.values()),
           lastResults: { ...serverStore.lastResults, ...local.lastResults },
           activeStrategyId: local.activeStrategyId || serverStore.activeStrategyId,
+          capitalMigratedTo100V1: true,
         };
         saveLocalStore(merged);
         return merged;
       }
-      saveLocalStore(serverStore);
-      return serverStore;
+      saveLocalStore({ ...serverStore, capitalMigratedTo100V1: true });
+      return { ...serverStore, capitalMigratedTo100V1: true };
     }
   } catch {
     // Server offline fallback to local
@@ -300,6 +328,7 @@ export async function fetchStrategyStore(): Promise<PersistentTerminalStore> {
     strategies: INITIAL_CLIENT_STRATEGIES,
     lastResults: {},
     activeStrategyId: INITIAL_CLIENT_STRATEGIES[0].id,
+    capitalMigratedTo100V1: true,
   };
 }
 
@@ -458,8 +487,12 @@ export async function triggerScreenerRunNow(): Promise<ScreenerScheduleStatus> {
   return res.json();
 }
 
-export async function triggerEmergencyFlatten(): Promise<any> {
-  const res = await fetch('/api/terminal/emergency-flatten', { method: 'POST' });
+export async function triggerEmergencyFlatten(strategyId?: string): Promise<any> {
+  const res = await fetch('/api/terminal/emergency-flatten', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ strategyId }),
+  });
   if (!res.ok) {
     throw new Error('Emergency Flatten fehlgeschlagen.');
   }
@@ -478,6 +511,30 @@ export async function refreshCmcIntelligence(): Promise<CmcIntelligencePayload> 
   const res = await fetch('/api/cmc/refresh', { method: 'POST' });
   if (!res.ok) {
     throw new Error('CoinMarketCap Refresh fehlgeschlagen.');
+  }
+  return res.json();
+}
+
+export async function fetchPionexUniverse(force = false): Promise<PionexUniversePayload> {
+  const res = await fetch(`/api/pionex/universe${force ? '?force=1' : ''}`);
+  if (!res.ok) {
+    throw new Error('Pionex USDT-Universum konnte nicht geladen werden.');
+  }
+  return res.json();
+}
+
+export async function scanPionexUniverseNow(): Promise<PionexUniversePayload> {
+  const res = await fetch('/api/pionex/scan', { method: 'POST' });
+  if (!res.ok) {
+    throw new Error('Pionex Universum-Scan fehlgeschlagen.');
+  }
+  return res.json();
+}
+
+export async function fetchFinanceNews(force = false): Promise<FinanceNewsPayload> {
+  const res = await fetch(`/api/news/finance${force ? '?force=1' : ''}`);
+  if (!res.ok) {
+    throw new Error('Yahoo & MSN Finance News konnten nicht geladen werden.');
   }
   return res.json();
 }
@@ -581,3 +638,230 @@ export function exportPineScriptFile(strategyName: string, symbol: string, pineC
   document.body.removeChild(link);
   URL.revokeObjectURL(url);
 }
+
+export async function generateBroadcastCommentary(
+  payload: CommentaryGenerateRequest
+): Promise<CommentaryGenerateResponse> {
+  const res = await fetch('/api/commentary/generate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(json?.error || `Kommentar-API Fehler (${res.status})`);
+  }
+  return json as CommentaryGenerateResponse;
+}
+
+export async function fetchTtsBackendStatus(force = false): Promise<TtsBackendStatus> {
+  const res = await fetch(`/api/tts/status${force ? '?force=1' : ''}`);
+  if (!res.ok) {
+    throw new Error('TTS-Bridge Status konnte nicht abgefragt werden.');
+  }
+  return res.json();
+}
+
+export async function synthesizeQwenTtsWav(
+  text: string,
+  voice = 'ryan',
+  language = 'German'
+): Promise<Blob | null> {
+  try {
+    const res = await fetch('/api/tts/synthesize', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, voice, language }),
+    });
+    if (!res.ok) {
+      return null;
+    }
+    const contentType = res.headers.get('content-type') || '';
+    if (!contentType.includes('audio')) {
+      return null;
+    }
+    return await res.blob();
+  } catch {
+    return null;
+  }
+}
+
+export async function synthesizeGoogleNaturalVoiceWav(
+  text: string,
+  voice = 'Kore',
+  style?: string
+): Promise<{ blob: Blob | null; error?: string }> {
+  try {
+    const res = await fetch('/api/tts/google', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, voice, style }),
+    });
+    if (!res.ok) {
+      const payload = await res.json().catch(() => null);
+      return {
+        blob: null,
+        error: payload?.reason || payload?.error || `Google TTS HTTP ${res.status}`,
+      };
+    }
+    const contentType = res.headers.get('content-type') || '';
+    if (!contentType.includes('audio')) {
+      return {
+        blob: null,
+        error: 'Google TTS lieferte kein Audio-Format zurück.',
+      };
+    }
+    return { blob: await res.blob() };
+  } catch (err: any) {
+    return {
+      blob: null,
+      error: err?.message || 'Google Natural Voice Netzwerkfehler.',
+    };
+  }
+}
+
+export async function fetchKeyTakeawayState(): Promise<{
+  latest: KeyTakeawayReport | null;
+  history: KeyTakeawayReport[];
+  intervalMs: number;
+}> {
+  const res = await fetch('/api/studio/key-takeaway');
+  if (!res.ok) {
+    throw new Error(`Key Takeaway Abruf fehlgeschlagen (${res.status})`);
+  }
+  return res.json();
+}
+
+export async function generateKeyTakeawayNow(activeSymbol: string): Promise<{
+  report: KeyTakeawayReport;
+  latest: KeyTakeawayReport | null;
+  history: KeyTakeawayReport[];
+  intervalMs: number;
+}> {
+  const res = await fetch('/api/studio/key-takeaway', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ activeSymbol }),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(json?.error || `Key Takeaway Generierung fehlgeschlagen (${res.status})`);
+  }
+  return json;
+}
+
+export async function fetchStudioChatState(forcePoll = false): Promise<StudioLiveChatState> {
+  const res = await fetch(`/api/studio/chat${forcePoll ? '?poll=1' : ''}`);
+  if (!res.ok) {
+    throw new Error(`Live-Chat Abruf fehlgeschlagen (${res.status})`);
+  }
+  return res.json();
+}
+
+export async function postStudioChatMessage(
+  author: string,
+  text: string
+): Promise<{ message: StudioChatMessage; state: StudioLiveChatState }> {
+  const res = await fetch('/api/studio/chat/message', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ author, text }),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(json?.error || `Nachricht konnte nicht gesendet werden (${res.status})`);
+  }
+  return json;
+}
+
+export async function connectYoutubeChat(urlOrId: string): Promise<StudioLiveChatState> {
+  const res = await fetch('/api/studio/chat/youtube/connect', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ urlOrId }),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(json?.error || `YouTube Verbindung fehlgeschlagen (${res.status})`);
+  }
+  return json;
+}
+
+export async function disconnectYoutubeChat(): Promise<StudioLiveChatState> {
+  const res = await fetch('/api/studio/chat/youtube/disconnect', { method: 'POST' });
+  if (!res.ok) {
+    throw new Error(`YouTube Trennung fehlgeschlagen (${res.status})`);
+  }
+  return res.json();
+}
+
+export async function toggleStudioAutoAnswer(enabled: boolean): Promise<StudioLiveChatState> {
+  const res = await fetch('/api/studio/chat/auto-answer', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled }),
+  });
+  if (!res.ok) {
+    throw new Error(`Auto-Q&A Umschalten fehlgeschlagen (${res.status})`);
+  }
+  return res.json();
+}
+
+export async function replyStudioChatQuestion(
+  messageId: string,
+  activeSymbol: string
+): Promise<{ message: StudioChatMessage; state: StudioLiveChatState }> {
+  const res = await fetch('/api/studio/chat/reply', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ messageId, activeSymbol }),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(json?.error || `Chat-Antwort fehlgeschlagen (${res.status})`);
+  }
+  return json;
+}
+
+export async function fetchAgentConvergenceState(): Promise<AgentConvergenceState> {
+  const res = await fetch('/api/agents/convergence');
+  if (!res.ok) {
+    throw new Error(`Agenten-Konvergenz Abruf fehlgeschlagen (${res.status})`);
+  }
+  return res.json();
+}
+
+export async function updateAgentConvergenceConfig(
+  patch: Partial<AgentExecutionConfig>
+): Promise<{ config: AgentExecutionConfig; state: AgentConvergenceState }> {
+  const res = await fetch('/api/agents/convergence/config', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(json?.error || `Agenten-Konfiguration fehlgeschlagen (${res.status})`);
+  }
+  return json;
+}
+
+export async function evaluateAgentConvergenceNow(payload: {
+  activeSymbol: string;
+  teleprompterScript: string;
+  trigger: AgentConvergenceTrigger;
+  strategyId?: string;
+  initialCapital?: number;
+}): Promise<{ decision: AgentConvergenceDecision; state: AgentConvergenceState }> {
+  const res = await fetch('/api/agents/convergence/evaluate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(json?.error || `Agenten-Synthese fehlgeschlagen (${res.status})`);
+  }
+  return json;
+}
+

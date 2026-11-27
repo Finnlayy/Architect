@@ -97,7 +97,8 @@ export interface AgentEngineContext {
   getPortfolioState: () => any;
 }
 
-// In-Memory Idempotency Lock Store (TTL: 60 seconds)
+// In-Memory Idempotency Lock Store (TTL: 60 seconds, bounded O(1))
+const MAX_IDEMPOTENCY_ENTRIES = 250;
 const idempotencyStore = new Map<string, { timestamp: number; traceId: string }>();
 
 // Telemetry Traces Ring Buffer (Latest 50 execution cycles)
@@ -118,6 +119,44 @@ function purgeExpiredIdempotencyKeys() {
       idempotencyStore.delete(key);
     }
   }
+}
+
+function recordIdempotencyLock(key: string, traceId: string) {
+  if (idempotencyStore.has(key)) {
+    idempotencyStore.delete(key);
+  } else if (idempotencyStore.size >= MAX_IDEMPOTENCY_ENTRIES) {
+    purgeExpiredIdempotencyKeys();
+    while (idempotencyStore.size >= MAX_IDEMPOTENCY_ENTRIES) {
+      const oldest = idempotencyStore.keys().next().value;
+      if (!oldest) break;
+      idempotencyStore.delete(oldest);
+    }
+  }
+  idempotencyStore.set(key, { timestamp: Date.now(), traceId });
+}
+
+export function pruneAgentMemory(aggressive = false): number {
+  const before = idempotencyStore.size + traceBuffer.length;
+  purgeExpiredIdempotencyKeys();
+  if (aggressive && traceBuffer.length > 20) {
+    traceBuffer.length = 20;
+  }
+  if (aggressive && idempotencyStore.size > 60) {
+    while (idempotencyStore.size > 60) {
+      const oldest = idempotencyStore.keys().next().value;
+      if (!oldest) break;
+      idempotencyStore.delete(oldest);
+    }
+  }
+  const after = idempotencyStore.size + traceBuffer.length;
+  return Math.max(0, before - after);
+}
+
+export function getAgentMemoryStats() {
+  return {
+    idempotencyCount: idempotencyStore.size,
+    traceBufferCount: traceBuffer.length,
+  };
 }
 
 // Lazy Gemini SDK client initialization
@@ -372,8 +411,8 @@ export async function runOmegaExecutionCycle(
     return traceEvent;
   }
 
-  // Register lock
-  idempotencyStore.set(idempotencyKey, { timestamp: Date.now(), traceId });
+  // Register lock (bounded O(1))
+  recordIdempotencyLock(idempotencyKey, traceId);
 
   nodes.push({
     node: 'IDEMPOTENCY_LOCK',
