@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { WorkerBotData, WorkerBotWsMessage } from '../types/trading';
 import { INITIAL_WORKER_BOTS } from '../data/workerBots';
+import { arcadeSoundEngine } from '../services/arcadeSoundEngine';
 
 /**
  * Resolves the WebSocket URL safely across browser environments.
@@ -46,6 +47,54 @@ export const useBotStream = (
   const isMountedRef = useRef<boolean>(true);
   const isWsConnectedRef = useRef<boolean>(false);
   const fallbackIntervalRef = useRef<number | null>(null);
+  const pendingUpdatesRef = useRef<Record<string, any>>({});
+  const hasPendingRef = useRef<boolean>(false);
+
+  // 4 Hz (250ms) Controlled UI State Flush to prevent React Fiber queue exhaustion & memory leak
+  useEffect(() => {
+    const timer = setInterval(() => {
+      if (!hasPendingRef.current) return;
+      const updates = { ...pendingUpdatesRef.current };
+      pendingUpdatesRef.current = {};
+      hasPendingRef.current = false;
+
+      const keys = Object.keys(updates);
+      if (keys.length === 0) return;
+
+      setBots((currentBots) =>
+        currentBots.map((bot) => {
+          const payload = updates[bot.id];
+          if (!payload) return bot;
+
+          const mergedMetrics = payload.metrics
+            ? { ...bot.metrics, ...payload.metrics }
+            : bot.metrics;
+
+          const mergedPnL = payload.unrealizedPnL
+            ? { ...bot.unrealizedPnL, ...payload.unrealizedPnL }
+            : bot.unrealizedPnL;
+
+          const mergedRuntime = payload.runtime
+            ? { ...bot.runtime, ...payload.runtime }
+            : bot.runtime;
+
+          return {
+            ...bot,
+            ...payload,
+            metrics: mergedMetrics,
+            unrealizedPnL: mergedPnL,
+            runtime: mergedRuntime,
+            unrealizedPnlUsd: mergedPnL.value,
+            unrealizedPnlPct: mergedPnL.percentage,
+            lastUpdate: new Date(),
+            lastUpdated: new Date().toTimeString().split(' ')[0],
+          };
+        })
+      );
+    }, 250);
+
+    return () => clearInterval(timer);
+  }, []);
 
   // Sync if initialBots list changes from parent (e.g. live Kraken orderbook revaluation)
   useEffect(() => {
@@ -80,6 +129,7 @@ export const useBotStream = (
 
   // Bidirektionaler Befehl an die Engine (z.B. Status umschalten)
   const toggleBotStatus = useCallback((botId: string) => {
+    arcadeSoundEngine.play('UI_FEEDBACK');
     console.log(`Befehl an Engine: Schalte Status für ${botId} um`);
 
     // 1. Bidirektional über den WebSocket an das Backend senden
@@ -115,6 +165,15 @@ export const useBotStream = (
   }, []);
 
   const stopWorkerBot = useCallback((botId: string, reason: string = 'MANUAL_STOP') => {
+    if (reason === 'TAKE_PROFIT') {
+      arcadeSoundEngine.play('TAKE_PROFIT');
+    } else if (reason === 'STOP_LOSS') {
+      arcadeSoundEngine.play('STOP_LOSS');
+    } else if (reason === 'LIQUIDATED') {
+      arcadeSoundEngine.play('CRITICAL_ALARM');
+    } else {
+      arcadeSoundEngine.play('UI_FEEDBACK');
+    }
     // 1. WebSocket Event an Quant-Engine senden
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       try {
@@ -238,45 +297,30 @@ export const useBotStream = (
           try {
             const message: WorkerBotWsMessage = JSON.parse(event.data);
 
-            // Wir erwarten kleine Delta-Updates (Ticks), um Performance zu sparen
+            // Throttled high-performance ingest: Buffer delta ticks and flush in 4Hz batch loop
             if (message.type === 'TICK_UPDATE' && message.payload) {
               const payload = message.payload;
-              setBots((currentBots) =>
-                currentBots.map((bot) => {
-                  if (bot.id !== payload.id) return bot;
-
-                  // Deep merge partial metrics & PnL cleanly
-                  const mergedMetrics = payload.metrics
-                    ? { ...bot.metrics, ...payload.metrics }
-                    : bot.metrics;
-
-                  const mergedPnL = payload.unrealizedPnL
-                    ? { ...bot.unrealizedPnL, ...payload.unrealizedPnL }
-                    : bot.unrealizedPnL;
-
-                  const mergedRuntime = payload.runtime
-                    ? { ...bot.runtime, ...payload.runtime }
-                    : bot.runtime;
-
-                  return {
-                    ...bot,
-                    ...payload,
-                    metrics: mergedMetrics,
-                    unrealizedPnL: mergedPnL,
-                    runtime: mergedRuntime,
-                    unrealizedPnlUsd: mergedPnL.value,
-                    unrealizedPnlPct: mergedPnL.percentage,
-                    lastUpdate: new Date(), // Zeitstempel für den Footer erneuern
-                    lastUpdated: new Date().toTimeString().split(' ')[0],
-                  };
-                })
-              );
+              pendingUpdatesRef.current[payload.id] = {
+                ...(pendingUpdatesRef.current[payload.id] || {}),
+                ...payload,
+              };
+              hasPendingRef.current = true;
             } else if (message.type === 'BOT_FINISHED' && message.payload) {
               // Bot aus dem Array filtern -> Verschwindet sofort aus dem UI
               console.log(`[Swarm WS] BOT_FINISHED empfangen: ${message.payload.id} (${message.payload.reason || 'TERMINATED'})`);
+              if (message.payload.reason === 'TAKE_PROFIT') {
+                arcadeSoundEngine.play('TAKE_PROFIT');
+              } else if (message.payload.reason === 'STOP_LOSS') {
+                arcadeSoundEngine.play('STOP_LOSS');
+              } else if (message.payload.reason === 'LIQUIDATED') {
+                arcadeSoundEngine.play('CRITICAL_ALARM');
+              } else {
+                arcadeSoundEngine.play('UI_FEEDBACK');
+              }
               setBots((current) => current.filter((bot) => bot.id !== message.payload.id));
             } else if (message.type === 'BOT_ORDER_EXECUTED' && message.payload) {
               const payload = message.payload;
+              arcadeSoundEngine.play('ORDER_FILL');
               console.log(`[Kraken CLI Hook] BOT_ORDER_EXECUTED for ${payload.botName}: ${payload.cliCommand} | TXID: ${payload.txid}`);
               setBots((currentBots) =>
                 currentBots.map((bot) => {
@@ -390,8 +434,10 @@ export const useBotStream = (
           }),
         });
         const data = await res.json();
+        arcadeSoundEngine.play('ORDER_FILL');
         return data;
       } catch (err) {
+        arcadeSoundEngine.play('WARNING_MEME');
         console.error('[useBotStream] triggerBotCliOrder error:', err);
         throw err;
       }

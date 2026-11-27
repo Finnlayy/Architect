@@ -26,12 +26,17 @@ export interface PaperTrade {
 export interface PaperPosition {
   pair: string;
   type: 'buy' | 'sell';
+  side?: 'LONG' | 'SHORT';
   vol: number;
+  volume?: number;
   cost: number;
   entry_price: number;
   current_price: number;
   unrealized_pnl: number;
   unrealized_pnl_pct: number;
+  opened_at?: number;
+  opened_at_formatted?: string;
+  txid?: string;
 }
 
 export interface PaperOrder {
@@ -275,7 +280,7 @@ export function executeKraken181Leaf(
     // ==========================================
     case 'paper/init': {
       const balIdx = args.indexOf('--balance');
-      const initAmt = balIdx !== -1 && args[balIdx + 1] ? parseFloat(args[balIdx + 1]) : 1000.0;
+      const initAmt = balIdx !== -1 && args[balIdx + 1] ? parseFloat(args[balIdx + 1]) : 100.0;
       pLedger.current_value = initAmt;
       pLedger.initial_balance = initAmt;
       pLedger.cash = initAmt;
@@ -368,25 +373,35 @@ export function executeKraken181Leaf(
         status: 'filled',
       };
       pLedger.history.unshift(newTrade);
+      if (pLedger.history.length > 100) pLedger.history.length = 100;
 
       const existingIdx = pLedger.positions.findIndex((p) => p.pair === pair && p.type === 'buy');
+      const nowMs = Date.now();
+      const timeStr = new Date(nowMs).toLocaleTimeString('de-DE', { hour12: false });
       if (existingIdx !== -1) {
         const ep = pLedger.positions[existingIdx];
-        const combinedVol = ep.vol + vol;
-        const combinedCost = ep.cost + cost;
-        ep.entry_price = Math.round((combinedCost / combinedVol) * 100) / 100;
+        const combinedVol = Number((ep.vol + vol).toFixed(6));
+        const combinedCost = Number((ep.cost + cost).toFixed(2));
+        ep.entry_price = Number((combinedCost / combinedVol).toPrecision(6));
         ep.vol = combinedVol;
+        ep.volume = combinedVol;
         ep.cost = combinedCost;
+        ep.txid = txid;
       } else {
         pLedger.positions.push({
           pair,
           type: 'buy',
+          side: 'LONG',
           vol,
+          volume: vol,
           cost,
           entry_price: price,
           current_price: price,
           unrealized_pnl: 0,
           unrealized_pnl_pct: 0,
+          opened_at: nowMs,
+          opened_at_formatted: timeStr,
+          txid,
         });
       }
 
@@ -454,6 +469,7 @@ export function executeKraken181Leaf(
         pnl,
         status: 'filled',
       });
+      if (pLedger.history.length > 100) pLedger.history.length = 100;
 
       updatePaperMarks();
 
@@ -521,7 +537,7 @@ export function executeKraken181Leaf(
 
     case 'paper/reset': {
       const balIdx = args.indexOf('--balance');
-      const resetAmt = balIdx !== -1 && args[balIdx + 1] ? parseFloat(args[balIdx + 1]) : 1000.0;
+      const resetAmt = balIdx !== -1 && args[balIdx + 1] ? parseFloat(args[balIdx + 1]) : 100.0;
       pLedger.current_value = resetAmt;
       pLedger.initial_balance = resetAmt;
       pLedger.cash = resetAmt;
@@ -1807,6 +1823,9 @@ export function executeKraken181Leaf(
         text: `Trading session ${sId} opened with strategy swarm active.`,
         category: 'SESSION_START',
       });
+      if (state.session.journal.length > 100) {
+        state.session.journal.splice(0, state.session.journal.length - 100);
+      }
       return {
         data: {
           session_id: sId,
@@ -1844,6 +1863,9 @@ export function executeKraken181Leaf(
         timestamp: Date.now(),
         text: msg,
       });
+      if (state.session.journal.length > 100) {
+        state.session.journal.splice(0, state.session.journal.length - 100);
+      }
       return {
         data: { status: 'logged', message: msg, timestamp: Date.now() },
         exitCode: 0,

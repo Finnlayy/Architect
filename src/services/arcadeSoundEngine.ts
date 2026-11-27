@@ -23,7 +23,12 @@ export type SoundEventType =
   | 'UI_FEEDBACK'
   | 'CRITICAL_ALARM';
 
-export type SoundPackMode = 'TERMINAL_CHIMES' | '8BIT_MEGAMAN' | 'VIRAL_MEME' | 'HYBRID';
+export type SoundPackMode =
+  | 'TERMINAL_CHIMES'
+  | '8BIT_MEGAMAN'
+  | 'VIRAL_MEME'
+  | 'HYBRID'
+  | 'VOICE_COMMENTATOR';
 
 export interface AudioPreferences {
   enabled: boolean;
@@ -109,13 +114,16 @@ const DEFAULT_PREFS: AudioPreferences = {
 };
 
 type PlaybackListener = (event: ActiveSoundPlaybackEvent) => void;
+type PrefsListener = (prefs: AudioPreferences) => void;
 
 class TerminalSoundEngine {
   private ctx: AudioContext | null = null;
   private prefs: AudioPreferences = { ...DEFAULT_PREFS };
   private lastPlayedMap: Map<SoundEventType, number> = new Map();
   private listeners: Set<PlaybackListener> = new Set();
+  private prefsListeners: Set<PrefsListener> = new Set();
   private noiseBuffer: AudioBuffer | null = null;
+  private voiceSpeaking = false;
 
   constructor() {
     this.loadPrefs();
@@ -146,7 +154,8 @@ class TerminalSoundEngine {
             parsed.pack === 'TERMINAL_CHIMES' ||
             parsed.pack === '8BIT_MEGAMAN' ||
             parsed.pack === 'VIRAL_MEME' ||
-            parsed.pack === 'HYBRID'
+            parsed.pack === 'HYBRID' ||
+            parsed.pack === 'VOICE_COMMENTATOR'
               ? parsed.pack
               : DEFAULT_PREFS.pack,
           muteBackgroundAlerts: Boolean(parsed.muteBackgroundAlerts),
@@ -180,7 +189,30 @@ class TerminalSoundEngine {
           : this.prefs.volume,
     };
     this.savePrefs();
-    return this.getPreferences();
+    const snapshot = this.getPreferences();
+    for (const listener of this.prefsListeners) {
+      try {
+        listener(snapshot);
+      } catch {
+        // ignore
+      }
+    }
+    return snapshot;
+  }
+
+  public subscribePreferences(listener: PrefsListener): () => void {
+    this.prefsListeners.add(listener);
+    return () => {
+      this.prefsListeners.delete(listener);
+    };
+  }
+
+  public setVoiceSpeaking(active: boolean): void {
+    this.voiceSpeaking = active;
+  }
+
+  public isVoiceSpeaking(): boolean {
+    return this.voiceSpeaking;
   }
 
   public toggleMute(): boolean {
@@ -271,7 +303,8 @@ class TerminalSoundEngine {
     osc.type = waveform;
     osc.frequency.setValueAtTime(Math.max(20, freq), startTime);
 
-    const masterGain = Math.max(0.0001, gainPeak * this.prefs.volume);
+    const duckFactor = this.voiceSpeaking ? 0.35 : 1.0;
+    const masterGain = Math.max(0.0001, gainPeak * this.prefs.volume * duckFactor);
     gain.gain.setValueAtTime(0.0001, startTime);
     // Soft attack (8ms) avoids pop/clicking artifacts
     gain.gain.linearRampToValueAtTime(masterGain, startTime + 0.008);
@@ -424,6 +457,54 @@ class TerminalSoundEngine {
 
     const t0 = ctx.currentTime + 0.005;
     const pack = this.prefs.pack;
+
+    // =========================================================================
+    // 5. VOICE_COMMENTATOR PROFILE (Live-Kommentator für Events & CMC; dezente Chimes für Fills/Backtests)
+    // =========================================================================
+    if (pack === 'VOICE_COMMENTATOR') {
+      // Suppress noisy background radar chime while anchor voice is actively speaking
+      if (resolvedType === 'SCREENER_ALERT' && options?.isBackground && this.voiceSpeaking) {
+        return;
+      }
+      switch (resolvedType) {
+        case 'TAKE_PROFIT': {
+          this.scheduleChime(ctx, 1318.51, t0, 0.24, 0.16, 'sine', 2400);
+          this.scheduleChime(ctx, 1975.53, t0 + 0.06, 0.28, 0.14, 'sine', 2400);
+          this.emitPlayback('TAKE_PROFIT', 'DESK TP CHIME (STILL)', 280);
+          break;
+        }
+        case 'STOP_LOSS': {
+          this.scheduleChime(ctx, 587.33, t0, 0.20, 0.15, 'sine', 1200);
+          this.scheduleChime(ctx, 392.0, t0 + 0.07, 0.26, 0.16, 'triangle', 1000);
+          this.emitPlayback('STOP_LOSS', 'DESK SL CHIME (STILL)', 280);
+          break;
+        }
+        case 'ORDER_FILL': {
+          this.scheduleChime(ctx, 1479.98, t0, 0.12, 0.14, 'sine', 2200);
+          this.emitPlayback('ORDER_FILL', 'DESK FILL CHIME', 140);
+          break;
+        }
+        case 'SCREENER_ALERT': {
+          // Gentle broadcast cue before commentator speaks
+          this.scheduleChime(ctx, 783.99, t0, 0.22, 0.14, 'sine', 1800);
+          this.scheduleChime(ctx, 1174.66, t0 + 0.06, 0.24, 0.14, 'sine', 2200);
+          this.emitPlayback('SCREENER_ALERT', 'DESK EVENT CUE', 260);
+          break;
+        }
+        case 'UI_FEEDBACK': {
+          this.scheduleChime(ctx, 1046.5, t0, 0.05, 0.14, 'sine', 1800);
+          this.emitPlayback('UI_FEEDBACK', 'DESK CLICK', 55);
+          break;
+        }
+        case 'CRITICAL_ALARM': {
+          this.scheduleChime(ctx, 220.0, t0, 0.36, 0.24, 'triangle', 600);
+          this.scheduleChime(ctx, 110.0, t0 + 0.07, 0.40, 0.26, 'sine');
+          this.emitPlayback('CRITICAL_ALARM', 'DESK ALARM CHIME', 420);
+          break;
+        }
+      }
+      return;
+    }
 
     // =========================================================================
     // 1. DEFAULT: DEZENTE TERMINAL-SYNTH-CHIMES (Subtil, elegant, nie aufdringlich)

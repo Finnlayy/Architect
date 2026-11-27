@@ -1,0 +1,6 @@
+{
+  "summary":  "Implementierungsplan für das zweigeteilte Analog-TV Börsenstudio-Stream-Interface (Seite 1: Studio-Stream mit VU-Meter, Kippschaltern, Laufband & Layout-Modi; Seite 2: Aktiver Prop-Firm-Challenge-Tester nach LuxAlgo prop-firm-sim) sowie die Backend TTS-Bridge für qwentts.cpp mit Browser-Stimme-Fallback.",
+  "updatedAt":  "2026-11-24T08:02:09.483083579Z",
+  "requestFeedback":  true,
+  "userFacing":  true
+}

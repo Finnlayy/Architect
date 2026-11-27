@@ -20,10 +20,13 @@ const PROVIDER_COLORS: Record<DataProviderId, string> = {
   CCXT: 'text-[#10B981] border-[#10B981]/40 bg-[#10B981]/10',
   MEXC: 'text-[#00C087] border-[#00C087]/50 bg-[#00C087]/15',
   CMC: 'text-[#3861FB] border-[#3861FB]/50 bg-[#3861FB]/15',
+  PIONEX: 'text-[#F97316] border-[#F97316]/50 bg-[#F97316]/15',
   GAINIUM: 'text-[#A855F7] border-[#A855F7]/40 bg-[#A855F7]/10',
   BINANCE: 'text-[#F59E0B] border-[#F59E0B]/40 bg-[#F59E0B]/10',
   ALPACA: 'text-[#3B82F6] border-[#3B82F6]/40 bg-[#3B82F6]/10',
   ALPHAVANTAGE: 'text-[#EC4899] border-[#EC4899]/40 bg-[#EC4899]/10',
+  YAHOO_FINANCE: 'text-[#C084FC] border-[#A855F7]/50 bg-[#A855F7]/15',
+  MSN_FINANCE: 'text-[#38BDF8] border-[#38BDF8]/50 bg-[#38BDF8]/15',
 };
 
 export const TerminalPipelineStrip: React.FC<TerminalPipelineStripProps> = React.memo(({

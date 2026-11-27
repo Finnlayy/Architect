@@ -146,6 +146,7 @@ export function useKrakenStream(
   const [messagesCount, setMessagesCount] = useState<number>(0);
   const [lastTickTime, setLastTickTime] = useState<Date | null>(new Date());
   const [isRealKrakenData, setIsRealKrakenData] = useState<boolean>(false);
+  const isRealKrakenDataRef = useRef<boolean>(false);
   const [reconnectAttempt, setReconnectAttempt] = useState<number>(0);
   const [nextRetryDelayMs, setNextRetryDelayMs] = useState<number | null>(null);
   const [nextRetryAt, setNextRetryAt] = useState<number | null>(null);
@@ -190,7 +191,7 @@ export function useKrakenStream(
         latencyMs: event.latencyMs,
       };
 
-      setConnectionHistory((prev) => [entry, ...prev].slice(0, 150));
+      setConnectionHistory((prev) => [entry, ...prev].slice(0, 50));
     },
     [port]
   );
@@ -282,19 +283,26 @@ export function useKrakenStream(
     (data: any) => {
       if (!data) return;
 
+      const markRealData = () => {
+        if (!isRealKrakenDataRef.current) {
+          isRealKrakenDataRef.current = true;
+          setIsRealKrakenData(true);
+        }
+      };
+
       // 1. Snapshot with multiple markets { markets: Record<string, OrderbookData> }
       if (data.markets && typeof data.markets === 'object') {
         for (const [sym, book] of Object.entries(data.markets)) {
           ingestOrderbook(sym, book);
         }
-        setIsRealKrakenData(true);
+        markRealData();
         return;
       }
 
       // 2. Quant Engine Tick format: { type: 'MARKET_TICK', symbol: 'BTC/USD', data: ... }
       if (data.symbol && (data.data || data.bids || data.lastPrice)) {
         ingestOrderbook(data.symbol, data.data || data);
-        setIsRealKrakenData(true);
+        markRealData();
         return;
       }
 
@@ -333,7 +341,7 @@ export function useKrakenStream(
                 : 1.0,
           });
         }
-        setIsRealKrakenData(true);
+        markRealData();
         return;
       }
 
@@ -370,7 +378,7 @@ export function useKrakenStream(
             recentTrades: current?.recentTrades || [],
           });
         }
-        setIsRealKrakenData(true);
+        markRealData();
         return;
       }
 
@@ -396,7 +404,7 @@ export function useKrakenStream(
             recentTrades: trades.slice(0, 20),
           });
         }
-        setIsRealKrakenData(true);
+        markRealData();
         return;
       }
     },
@@ -475,10 +483,14 @@ export function useKrakenStream(
 
       es.addEventListener('market_update', (event: MessageEvent) => {
         try {
+          if (isWsConnectedRef.current) return;
           const payload = JSON.parse(event.data);
           if (payload.symbol && payload.data) {
             ingestOrderbook(payload.symbol, payload.data);
-            setIsRealKrakenData(true);
+            if (!isRealKrakenDataRef.current) {
+              isRealKrakenDataRef.current = true;
+              setIsRealKrakenData(true);
+            }
           }
         } catch {
           // Ignore JSON parse error
@@ -573,6 +585,8 @@ export function useKrakenStream(
         console.info(`[KrakenStream] WebSocket successfully connected on port ${port} (${duration}ms)`);
 
         isWsConnectedRef.current = true;
+        // CRITICAL: Close duplicate SSE fallback stream & REST polling timer once WS is live
+        stopSseFallbackBridge();
         reconnectAttemptsRef.current = 0;
         setReconnectAttempt(0);
         setNextRetryDelayMs(null);
@@ -581,6 +595,7 @@ export function useKrakenStream(
         setStreamStatus('LIVE');
         setStreamSource('KRAKEN_WS_PORT_1000');
         setLatencyMs(duration);
+        isRealKrakenDataRef.current = true;
         setIsRealKrakenData(true);
 
         logConnectionEvent({
@@ -857,7 +872,7 @@ export function useKrakenStream(
     };
   }, [connectWebSocketOnPort1000, stopSseFallbackBridge]);
 
-  // Controlled 4 Hz (250ms) UI state flush to maintain 60fps and prevent React re-render depth limits
+  // Controlled 1 Hz (1000ms) UI state flush to prevent 24/7 DOM/V8 heap exhaustion
   useEffect(() => {
     const flushInterval = setInterval(() => {
       if (hasPendingUpdateRef.current) {
@@ -866,7 +881,7 @@ export function useKrakenStream(
         setLastTickTime(lastTickTimeRef.current);
         hasPendingUpdateRef.current = false;
       }
-    }, 250);
+    }, 1000);
 
     return () => clearInterval(flushInterval);
   }, []);

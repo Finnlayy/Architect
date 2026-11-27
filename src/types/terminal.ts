@@ -3,10 +3,13 @@ export type DataProviderId =
   | 'CCXT'
   | 'MEXC'
   | 'CMC'
+  | 'PIONEX'
   | 'GAINIUM'
   | 'BINANCE'
   | 'ALPACA'
-  | 'ALPHAVANTAGE';
+  | 'ALPHAVANTAGE'
+  | 'YAHOO_FINANCE'
+  | 'MSN_FINANCE';
 
 export type TimeframeId = '1m' | '5m' | '15m' | '1h' | '4h' | '1d';
 
@@ -241,7 +244,10 @@ export interface ChronicleAnomalyEvent {
     | 'SHADOW_TRIGGER'
     | 'CAP_GUARD'
     | 'CMC_HEADLINE'
-    | 'CMC_DEX_FLOW';
+    | 'CMC_DEX_FLOW'
+    | 'YAHOO_NEWS'
+    | 'MSN_NEWS'
+    | 'PIONEX_SCAN';
   headline: string;
   detail: string;
   price: number;
@@ -372,5 +378,536 @@ export interface CmcIntelligencePayload {
   dexPairs: CmcDexPair[];
   exchanges: CmcExchangeRanking[];
   signals: CmcCommunitySignal[];
+}
+
+// ============================================================================
+// LIVE VOICE-OUT COMMENTATOR, TEACHABLE VOICE COMMANDS & CUSTOM EVENT CLIPS
+// ============================================================================
+
+export type CommentaryCategory =
+  | 'CHRONICLE'
+  | 'HEADLINE'
+  | 'DEX_FLOW'
+  | 'MARKET_PULSE';
+
+export interface CommentaryMetaFactsContext {
+  fearAndGreedIndex?: number;
+  fearAndGreedLabel?: string;
+  btcDominancePct?: number;
+  ethDominancePct?: number;
+  totalMarketCapUsd?: number;
+  dexVolume24hUsd?: number;
+  cmcRank?: number;
+  assetChange24hPct?: number;
+  assetTag?: string;
+  matchingHeadline?: string;
+  matchingCommunitySummary?: string;
+  matchingCommunityVotesPct?: number;
+  matchingDexPair?: {
+    pairSymbol: string;
+    dexName: string;
+    network: string;
+    liquidityUsd: number;
+    volume24hUsd: number;
+    txns24hBuys: number;
+    txns24hSells: number;
+    securityScore: number;
+  };
+  topExchangeName?: string;
+  topExchangeLiquidityScore?: number;
+}
+
+export interface CommentaryGenerateRequest {
+  eventId: string;
+  category: CommentaryCategory;
+  eventType?:
+    | ChronicleAnomalyEvent['eventType']
+    | 'MARKET_PULSE'
+    | 'COMMUNITY_SIGNAL'
+    | 'AGENT_PERSONA'
+    | 'AGENT_CONVERGENCE';
+  symbol: string;
+  provider?: string;
+  headline: string;
+  detail?: string;
+  price?: number;
+  rvol?: number;
+  changePct?: number;
+  severity?: 'BULLISH' | 'BEARISH' | 'NEUTRAL' | 'WARNING';
+  metaFacts?: CommentaryMetaFactsContext;
+}
+
+export interface CommentaryGenerateResponse {
+  eventId: string;
+  spokenText: string;
+  metaFactSummary: string;
+  generatedBy: 'gemini' | 'template';
+  modelUsed?: string;
+  upstreamNote?: string;
+  cached?: boolean;
+}
+
+export interface CommentaryBroadcastItem {
+  id: string;
+  eventId: string;
+  timestamp: number;
+  timeFormatted: string;
+  symbol: string;
+  category: CommentaryCategory;
+  eventType: string;
+  sourceLabel: string;
+  headline: string;
+  spokenText: string;
+  metaFactSummary: string;
+  generatedBy: 'gemini' | 'template' | 'custom_clip';
+  status: 'QUEUED' | 'GENERATING' | 'SPEAKING' | 'DONE' | 'SKIPPED';
+}
+
+export type VoiceCommandActionId =
+  | 'TOGGLE_PAUSE'
+  | 'SKIP_EVENT'
+  | 'REPLAY_LAST'
+  | 'TOGGLE_FULLSCREEN'
+  | 'READ_CMC_PULSE'
+  | 'FOCUS_LATEST_SYMBOL'
+  | 'CUSTOM_SPEAK';
+
+export interface VoiceCommandBinding {
+  id: string;
+  actionId: VoiceCommandActionId;
+  label: string;
+  description: string;
+  phrases: string[];
+  audioSignature?: number[];
+  audioDurationMs?: number;
+  customResponseText?: string;
+  enabled: boolean;
+  isBuiltin: boolean;
+  lastTrainedAt?: number;
+}
+
+export type TeachableEventClipCategory =
+  | 'BROADCAST_INTRO'
+  | 'RVOL_SPIKE'
+  | 'VWAP'
+  | 'HIGH_OF_DAY'
+  | 'ZSCORE_BREAK'
+  | 'CMC_HEADLINE'
+  | 'CMC_DEX_FLOW'
+  | 'SHADOW_TRIGGER';
+
+export type CustomClipPlaybackMode = 'INTRO_BEFORE_VOICE' | 'REPLACE_VOICE';
+
+export interface CustomEventAudioClipMeta {
+  eventType: TeachableEventClipCategory;
+  label: string;
+  description: string;
+  hasAudio: boolean;
+  mimeType: string;
+  durationMs: number;
+  playbackMode: CustomClipPlaybackMode;
+  enabled: boolean;
+  updatedAt: number;
+}
+
+// ============================================================================
+// PIONEX UNIVERSE SCANNER (@pionex/pionex-ai-kit) & YAHOO / MSN FINANCE NEWS
+// ============================================================================
+
+export type PionexMarketType = 'SPOT' | 'PERP';
+
+export type PionexSignalTag =
+  | 'PIONEX RVOL'
+  | 'TOP GAINER'
+  | 'TOP LOSER'
+  | 'PERP SURGE'
+  | 'BREAKOUT'
+  | 'NORMAL';
+
+export interface PionexMarketTicker {
+  symbol: string; // e.g., BTC_USDT, SOL_USDT_PERP
+  canonicalSymbol: string; // e.g., BTC/USDT, SOLUSDT.P
+  baseAsset: string;
+  marketType: PionexMarketType;
+  price: number;
+  open24h: number;
+  high24h: number;
+  low24h: number;
+  change24hPct: number;
+  rangePct: number;
+  volume24hBase: number;
+  amount24hUsd: number;
+  tradeCount24h: number;
+  rvolScore: number;
+  signalTag: PionexSignalTag;
+  updatedAt: number;
+}
+
+export interface PionexUniversePayload {
+  sourceMode: 'PIONEX_PUBLIC_API' | 'PIONEX_CACHED';
+  aiKitInstalled: boolean;
+  aiKitGlobalCliReady: boolean;
+  aiKitVersion: string | null;
+  totalUsdtMarkets: number;
+  spotCount: number;
+  perpCount: number;
+  anomaliesCount: number;
+  totalVolume24hUsd: number;
+  scanLatencyMs: number;
+  scannedAt: number;
+  tickers: PionexMarketTicker[];
+}
+
+export type FinanceNewsProvider = 'YAHOO_FINANCE' | 'MSN_FINANCE';
+
+export interface FinanceNewsItem {
+  id: string;
+  provider: FinanceNewsProvider;
+  sourceLabel: string;
+  title: string;
+  summary: string;
+  symbol: string;
+  publishedAt: number;
+  timeFormatted: string;
+  sentiment: 'BULLISH' | 'BEARISH' | 'NEUTRAL';
+  link: string;
+}
+
+export interface FinanceNewsPayload {
+  yahooCount: number;
+  msnCount: number;
+  fetchedAt: number;
+  items: FinanceNewsItem[];
+}
+
+// ============================================================================
+// QWENTTS.CPP BACKEND TTS BRIDGE & PROP FIRM CHALLENGE SIMULATOR
+// ============================================================================
+
+export type TtsEngineMode = 'AUTO' | 'GOOGLE_NATURAL' | 'QWENTTS' | 'BROWSER';
+
+export interface GoogleNaturalVoiceMeta {
+  id: string;
+  label: string;
+  style: string;
+  pitchHint: string;
+}
+
+export interface GoogleTtsStatus {
+  available: boolean;
+  model: string;
+  defaultVoice: string;
+  voices: GoogleNaturalVoiceMeta[];
+}
+
+export interface TtsBackendStatus {
+  configured: boolean;
+  reachable: boolean;
+  serverUrl: string;
+  repoInstalled: boolean;
+  builtBinaryFound: boolean;
+  activeModel: string | null;
+  speakers: string[];
+  registeredVoices: string[];
+  lastCheckedAt: number;
+  note: string;
+  googleTts?: GoogleTtsStatus;
+}
+
+export type PropFirmDrawdownMode = 'STATIC' | 'TRAILING_EOD' | 'TRAILING_INTRADAY';
+
+export interface PropFirmPreset {
+  id: string;
+  firmName: string;
+  challengeName: string;
+  category: 'CFD' | 'FUTURES' | 'CRYPTO';
+  accountSizeUsd: number;
+  feeUsd: number;
+  phase1TargetPct: number;
+  phase2TargetPct: number; // 0 = 1-Step Evaluation
+  maxDailyLossPct: number;
+  maxTotalLossPct: number;
+  drawdownMode: PropFirmDrawdownMode;
+  minTradingDays: number;
+  maxTradingDays: number;
+  consistencyMaxDayPct: number; // 0 = disabled, e.g., 30 = max 30% of total profit in one day
+  payoutTargetPct: number;
+}
+
+export interface PropFirmSimConfig {
+  preset: PropFirmPreset;
+  winRatePct: number;
+  avgWinR: number;
+  avgLossR: number;
+  riskPerTradePct: number;
+  tradesPerDay: number;
+  numPaths: number;
+  seed: number;
+}
+
+export interface PropFirmSamplePath {
+  id: number;
+  outcome: 'PASSED_FUNDED' | 'FAILED_PHASE_1' | 'FAILED_PHASE_2' | 'FAILED_FUNDED' | 'TIMED_OUT';
+  finalEquityUsd: number;
+  equitySeries: number[];
+}
+
+export interface PropFirmRiskSweepPoint {
+  riskPct: number;
+  passPct: number;
+  breachDailyPct: number;
+  breachTotalPct: number;
+  expectedAttempts: number;
+  expectedNetEvUsd: number;
+}
+
+export interface PropFirmSimulationResult {
+  passPhase1Pct: number;
+  passPhase2Pct: number;
+  passAllPct: number;
+  failDailyLossPct: number;
+  failMaxLossPct: number;
+  timeoutPct: number;
+  avgDaysToPass: number;
+  expectedAttempts: number;
+  expectedTotalFeeUsd: number;
+  expectedNetEvUsd: number;
+  optimalRiskPct: number;
+  samplePaths: PropFirmSamplePath[];
+  riskSweep: PropFirmRiskSweepPoint[];
+  computedAt: number;
+}
+
+export interface PropFirmAttemptTrade {
+  tradeNum: number;
+  day: number;
+  phase: 1 | 2 | 3; // 3 = Funded
+  isWin: boolean;
+  rMultiple: number;
+  pnlUsd: number;
+  equityAfterUsd: number;
+  drawdownFloorUsd: number;
+  dailyFloorUsd: number;
+  statusNote: string;
+}
+
+export interface PropFirmLiveAttempt {
+  seed: number;
+  presetSnapshot: PropFirmPreset;
+  phase: 1 | 2 | 3;
+  day: number;
+  phaseDay: number;
+  equityUsd: number;
+  highWaterMarkUsd: number;
+  drawdownFloorUsd: number;
+  dayStartEquityUsd: number;
+  dailyFloorUsd: number;
+  phaseTargetUsd: number;
+  bestSingleDayProfitUsd: number;
+  consistencyPct: number;
+  outcome: 'ACTIVE' | 'PASSED_FUNDED' | 'FAILED_DAILY_LOSS' | 'FAILED_MAX_DRAWDOWN' | 'TIMED_OUT';
+  breachReason: string | null;
+  trades: PropFirmAttemptTrade[];
+  equityHistory: number[];
+  floorHistory: number[];
+  dailyFloorHistory: number[];
+}
+
+// ============================================================================
+// 30-MINUTE KEY TAKEAWAY FORECAST & TV STUDIO LIVE CHAT Q&A
+// ============================================================================
+
+export interface KeyTakeawayTradeRecommendation {
+  rank: number; // 1..5
+  symbol: string;
+  direction: 'LONG' | 'SHORT';
+  entryPrice: string;
+  stopLoss: string;
+  takeProfit: string;
+  riskRewardRatio: string;
+  confidence: 'HIGH' | 'MEDIUM';
+  catalyst: string;
+}
+
+export interface KeyTakeawayMover {
+  symbol: string;
+  price: number;
+  changePct: number;
+  note: string;
+}
+
+export interface KeyTakeawayHeadline {
+  source: string;
+  symbol: string;
+  title: string;
+}
+
+export interface KeyTakeawayReport {
+  id: string;
+  generatedAt: number;
+  timeFormatted: string;
+  nextScheduledAt: number;
+  marketRegime: 'BULLISH' | 'BEARISH' | 'VOLATILE' | 'RANGE';
+  forecastBias: 'BULLISH' | 'BEARISH' | 'NEUTRAL';
+  forecast30mSummary: string;
+  topMoversSummary: KeyTakeawayMover[];
+  keyHeadlines: KeyTakeawayHeadline[];
+  recommendations: KeyTakeawayTradeRecommendation[];
+  spokenAnnouncement: string;
+  generatedBy: 'gemini' | 'deterministic';
+  modelUsed?: string;
+  upstreamNote?: string;
+}
+
+export type StudioChatSource = 'STUDIO' | 'YOUTUBE';
+export type StudioChatStatus = 'NEW' | 'QUEUED' | 'ANSWERED' | 'SKIPPED';
+
+export interface StudioChatMessage {
+  id: string;
+  source: StudioChatSource;
+  author: string;
+  text: string;
+  timestamp: number;
+  timeFormatted: string;
+  isQuestion: boolean;
+  status: StudioChatStatus;
+  answerText?: string;
+  answeredAt?: number;
+  answeredBy?: 'gemini' | 'deterministic';
+}
+
+export interface StudioLiveChatState {
+  youtubeConnected: boolean;
+  youtubeVideoId: string | null;
+  youtubeTitle: string | null;
+  youtubeMode: 'DATA_API' | 'PUBLIC_POLL' | 'DISCONNECTED';
+  lastPollAt: number | null;
+  pollError: string | null;
+  autoAnswerQuestions: boolean;
+  messages: StudioChatMessage[];
+}
+
+// ============================================================================
+// HYBRID 5-AGENT CONVERGENCE & MULTISENSORY EXECUTION ENGINE
+// ============================================================================
+
+export type AgentPersonaId =
+  | 'STRATEGIST'
+  | 'SKEPTIC'
+  | 'MEAN_REVERSION'
+  | 'TREND_FOLLOWER'
+  | 'NEWS_TRADER';
+
+export type AgentGroupRole = 'RISK_CORSET' | 'ADAPTIVE';
+export type AgentStance = 'LONG' | 'SHORT' | 'NEUTRAL' | 'VETO';
+export type AgentConvergenceTrigger =
+  | 'TELEPROMPTER'
+  | 'RVOL_SPIKE'
+  | 'MACRO_EVENT'
+  | 'MANUAL';
+
+export interface AgentPersonaMeta {
+  id: AgentPersonaId;
+  name: string;
+  shortLabel: string;
+  group: AgentGroupRole;
+  googleVoice: 'Charon' | 'Kore' | 'Zephyr' | 'Fenrir' | 'Puck';
+  voicePitch: number;
+  voiceRate: number;
+  speechStyle: string;
+  description: string;
+}
+
+export interface PureTeleprompterContext {
+  rawScriptText: string;
+  extractedPrompt: string;
+  symbol: string;
+  price: number;
+  change24hPct: number;
+  rvol: number;
+  fearAndGreedIndex: number;
+  macroHeadline: string;
+  charCount: number;
+  estTokens: number;
+}
+
+export interface AgentVote {
+  agentId: AgentPersonaId;
+  agentName: string;
+  group: AgentGroupRole;
+  googleVoice: 'Charon' | 'Kore' | 'Zephyr' | 'Fenrir' | 'Puck';
+  voicePitch: number;
+  voiceRate: number;
+  speechStyle: string;
+  stance: AgentStance;
+  confidence: number; // 0..100
+  thesis: string;
+  riskNote: string;
+  latencyMs: number;
+  generatedBy: 'gemini' | 'deterministic';
+}
+
+export interface AgentTradeSetup {
+  symbol: string;
+  direction: 'LONG' | 'SHORT';
+  entryPrice: number;
+  stopLoss: number;
+  takeProfit: number;
+  entryStr: string;
+  stopLossStr: string;
+  takeProfitStr: string;
+  riskRewardRatio: number;
+  riskRewardStr: string;
+  suggestedSizePct: number;
+}
+
+export interface AgentPaperExecutionRecord {
+  id: string;
+  decisionId: string;
+  timestamp: number;
+  timeFormatted: string;
+  symbol: string;
+  side: 'buy' | 'sell';
+  direction: 'LONG' | 'SHORT';
+  price: number;
+  vol: number;
+  costUsd: number;
+  stopLoss: number;
+  takeProfit: number;
+  status: 'EXECUTED' | 'SKIPPED' | 'BLOCKED';
+  reason: string;
+}
+
+export interface AgentExecutionConfig {
+  autoExecuteEnabled: boolean;
+  minConvergencePct: number; // 55..95
+  maxRiskPctPerTrade: number; // 1..10
+  cooldownSecPerSymbol: number; // 60..3600
+  autoSpeakDebate: boolean;
+}
+
+export interface AgentConvergenceDecision {
+  id: string;
+  timestamp: number;
+  timeFormatted: string;
+  trigger: AgentConvergenceTrigger;
+  context: PureTeleprompterContext;
+  votes: AgentVote[];
+  convergencePct: number;
+  consensusDirection: 'LONG' | 'SHORT' | 'WAIT';
+  riskCorsetVetoed: boolean;
+  vetoReason?: string;
+  tradeSetup: AgentTradeSetup | null;
+  spokenSummary: string;
+  totalLatencyMs: number;
+  executionRecord?: AgentPaperExecutionRecord;
+}
+
+export interface AgentConvergenceState {
+  latest: AgentConvergenceDecision | null;
+  history: AgentConvergenceDecision[];
+  executions: AgentPaperExecutionRecord[];
+  config: AgentExecutionConfig;
+  personas: AgentPersonaMeta[];
 }
 

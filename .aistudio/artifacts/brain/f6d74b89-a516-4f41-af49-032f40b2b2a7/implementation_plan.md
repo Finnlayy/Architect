@@ -1,131 +1,106 @@
-# OMEGA NIO — High-Density Quant & Execution Terminal (Arcane Monitor Layout + Multi-Exchange Cascade)
+# Hybrid 5-Agent Market Convergence & Multisensory Execution System
 
-Kompletter Umbau der bestehenden OMEGA-NIO-Anwendung zu einer **produktiven, hochdichten Echtzeit-Trading-, Screening- und Backtesting-Arbeitsoberfläche** im Stil des Referenzfotos (*Arcane Monitor / Finviz / Fischer*) kombiniert mit den gezielten Live-Animationen des Referenzvideos (*Pipeline-Flow, rollende Zähler, `ENTER`/`EXIT`/`FILTERED`-Protokoll*).
+This plan introduces a parallel 5-agent hybrid trading desk that extracts pure text directly from the live Teleprompter script feed to analyze real-time market data, orderflow RVOL spikes, and macro headlines with minimal token overhead and latency. When agent convergence clears the risk-corset threshold, the system outputs concrete Entry, Stop-Loss, and Take-Profit levels, plays role-matched multisensory audio cues and distinct agent voices, and auto-executes risk-capped trades in the Paper Book.
 
 ## User Review & Critical Decisions
 
-> [!IMPORTANT]
-> **Verbindliche System- & Architekturvorgaben aus deinem Feedback:**
-> 1. **Echte 6-Stufen-Marktdaten-Kaskade (Kein „Synthetic Fallback“-Müll)**:
->    - Wenn ein Symbol oder Zeitrahmen bei **Kraken** nicht vorliegt, zieht der Backend-Data-Router die historischen OHLCV-Kerzen und Live-Kurse automatisch über die Kaskade:
->      $$\text{1. Kraken} \longrightarrow \text{2. CCXT} \longrightarrow \text{3. Gainium} \longrightarrow \text{4. Binance} \longrightarrow \text{5. Alpaca} \longrightarrow \text{6. Alpha Vantage}$$
-> 2. **Automatische Scheduled Screener über alle 6 Quellen**:
->    - Alle sechs Provider (*Kraken, CCXT, Gainium, Binance, Alpaca, Alpha Vantage*) speisen den **automatisch im Schedule laufenden Multi-Source-Screener**, der kontinuierlich Symbole, RVOL-Spikes, VWAP-Crosses, Spreads und 24h-Ausbrüche aktualisiert.
-> 3. **Paper-Account Startkapital exakt `1.000 $`**:
->    - Das Startkapital (`initial_balance` / `initialCapital`) des Paper-Accounts und der Strategie-Konfiguration ist standardmäßig fest auf **`$1,000.00`** eingestellt.
-> 4. **Hartes Limit von maximal `20` gleichzeitigen Trades (`MAX_CONCURRENT_TRADES = 20`)**:
->    - Im gesamten System und im Sizer/M8-Gate dürfen **maximal 20 Trades gleichzeitig** offen sein (`Active Trades: X / 20`). Bei 20 offenen Trades werden weitere Entry-Signale strikt mit `FILTERED: MAX 20 TRADES REACHED` abgewiesen, bis wieder ein Slot frei wird.
-> 5. **Shadow-Engine (Inverse Gegenstrategie) im Hintergrund**:
->    - Die Shadow-Engine läuft als inverse Spiegelbild-Strategie automatisch mit, ohne die Hauptoberfläche mit theoretischem Ballast zu überfrachten.
+> [!IMPORTANT] All major placement, execution, acoustic, and evaluation triggers were confirmed during discovery. Please review the synthesized architecture below before implementation begins.
+
+-   **Confirmed Placement**: Displayed both as a dedicated **Agent Convergence** tab inside the **TV Studio Stream** deck (market & setup view only, keeping Paper Book internals off the broadcast stream) and as a full **Agent War Room** tab in the **Main Terminal** dock (including Paper Book auto-execution controls and fill audit).
+-   **Confirmed High-Convergence Execution**: Automatically executes eligible setups in the isolated **Paper Book** with strict risk caps (max per-trade capital % cap, minimum convergence % gate, fixed risk-corset veto override, per-symbol cooldown, and automatic SL/TP bracket placement respecting the 20-trade hard cap).
+-   **Confirmed Multisensory Audio**: Assigns a distinct **Google Natural Voice** profile to each of the 5 agent personas (with Web Speech pitch/rate fallbacks) paired with event-mapped synthesizer market chimes (RVOL radar cue, convergence harmonic chord, risk-veto warning, and execution fill chime).
+-   **Confirmed Evaluation Cadence**: Event-triggered whenever a new **Teleprompter script** updates or a qualifying **Agent Market Event** occurs (RVOL spike >= 2.0x or breaking macro/news catalyst), plus an on-demand manual trigger.
 
 ---
 
 ## 1. Overview & Core Concept
 
-- **Was das System leistet**: Ein mehrspaltiges Echtzeit-Trading- und Backtesting-Terminal ohne jeglichen Präsentations-Ballast. Automatische Scheduled Screener scannen fortlaufend Märkte über *Kraken, CCXT, Gainium, Binance, Alpaca und Alpha Vantage*. Der Nutzer wählt per Klick ein Symbol, konfiguriert seine Strategie (Startkapital `1.000 $`, Max. `20` parallele Trades), berechnet echte OHLCV-Backtests oder lässt die Pipeline live gegen den `1.000 $` Paper-Account arbeiten.
-- **Kernmehrwert**: Echte Multi-Exchange-Marktdatenabdeckung ohne künstliche Fallback-Badges, kombiniert mit der hohen Informationsdichte des *Arcane Monitor*-Rasters und dem flüssigen Pipeline-Feedback des *Grok Bot Terminals*.
+-   **What It Does**:
+    -   **Pure Teleprompter Context Extractor**: Captures the live spoken script feed plus compact structured market deltas (Symbol, Price, 24h change, RVOL, Fear & Greed) as a lean, de-duplicated plain-text prompt — eliminating redundant JSON overhead to minimize token spend and inference latency.
+    -   **Hybrid 5-Agent Parallel Committee**: Runs five strictly isolated personas concurrently so reasoning never cross-contaminates:
+        1.  **Analytischer Stratege** *(Fixed Risk Corset)* — Enforces risk minimization, minimum R:R, stop placement, and capital limits.
+        2.  **Datengetriebener Skeptiker** *(Fixed Risk Corset)* — Stress-tests every headline and spike against RVOL confirmation, orderbook depth, and bull/bear trap risk.
+        3.  **Geduldiger Mean-Reversion-Händler** *(Fixed Risk Corset)* — Measures VWAP/Z-score overextension and sentiment extremes to block late chasing.
+        4.  **Impulsiver Trendfolger** *(Adaptive)* — Captures high-RVOL breakout acceleration and EMA momentum continuation.
+        5.  **Opportunistischer News-Trader** *(Adaptive)* — Targets event-driven volatility bursts around macro releases and breaking headlines.
+    -   **Risk-Corset Convergence Engine**: Synthesizes the 5 independent stances into a single `0–100%` convergence score, consensus bias (`LONG`, `SHORT`, or `WAIT`), risk-veto verdict, and exact `Entry`, `Stop-Loss`, `Take-Profit`, and `R:R` levels.
+-   **Target Audience**: Active intraday and macro-event traders monitoring multi-source orderflow in both the TV Studio Broadcast view and the Main Execution Terminal.
+-   **Key Value**: Cuts LLM prompt bloat by feeding directly from the Teleprompter script stream, prevents groupthink via isolated parallel personas, and bridges real-time multi-agent consensus directly to risk-capped Paper execution and multisensory alerts.
 
 ---
 
 ## 2. User Experience & Visual Design
 
-### Visuelle Architektur (Foto-Layout + Video-Dynamik)
-
-- **Oberflächen & Farbkodierung**:
-  - **Tiefschwarzes Terminal-Grid**: Hintergrund `#07090E`, Panel-Flächen `#0C1017`, aktive Kopfzeilen `#111722`, gestochen scharfe 1px-Trennlinien `#1B2230`.
-  - **Semantische Signalfarben**:
-    - `#089981` / `#10B981` (Smaragdgrün): Long / `EXIT` im Gewinn / Bid-Absorption / Aktive Quelle
-    - `#F23645` (Karmesinrot): Short / `EXIT` im Verlust / Slot-Limit (`20/20`) / Ask-Dominanz / Emergency Kill Switch
-    - `#00E5FF` (Cyan): `ENTER`-Signale / Aktive Pipeline-Stufe / Fokus-Symbol
-    - `#FF9800` / `#EC4899` (Bernstein / Pink): `FILTERED` (z. B. durch `20/20 Trade Cap`, Spread-Limit oder Risiko-Gate)
-- **Typografie & Zahlen-Disziplin**:
-  - Kompakte Sans-Serif (`Plus Jakarta Sans` / `DM Sans`) für Panel-Titel und Steuerung (`10px`–`12px`, `whitespace-nowrap`).
-  - Striktes `JetBrains Mono` mit `font-variant-numeric: tabular-nums` für alle Kurse, Volumina, RVOL, Prozentwerte, Zeitstempel und PnL-Spalten.
-- **Gezielte Animationen (wie im Video)**:
-  - **5-Stufen-Pipeline (`SCANNER → RISK CHECK → SIZER → EXECUTOR → LOGGER`)**: Animierter Signalfluss mit Anzeige der aktuellen Positions-Auslastung (`Slots: X / 20`) und Prozent-Allokation vom `1.000 $` Konto.
-  - **Fließende Zähler**: Rollende `tabular-nums`-Zähler für Paper-Equity (startend bei `$1,000.00`), Realized/Unrealized PnL sowie Wins/Losses.
-  - **Absorptions- & Auslastungs-Balken (*Beam of Absorption*)**: Flüssig animierte horizontale Balken für Orderbuch-Tiefe und aktive Trade-Slots (`0–20`).
-
-### Durchgängiger Arbeitsablauf im Multi-Panel-Workspace
-
-1. **Top Command & Telemetry Bar**:
-   - Links: Markenkennung + Schnell-Umschalter für Symbol & Zeitrahmen (`1m`, `5m`, `15m`, `1h`, `4h`, `1d`) + aktive Datenquelle aus der Kaskade (`KRAKEN` · `CCXT` · `GAINIUM` · `BINANCE` · `ALPACA` · `ALPHA VANTAGE`) mit Zeitstempel.
-   - Mitte: **Paper-Account Equity Zähler** (Basis: **`$1,000.00`**), Win/Loss-Verhältnis, **Trade-Slot-Wächter (`X / 20 Active Trades`)** sowie Status laufender Jobs inkl. **„Abbrechen“**-Button.
-   - Rechts: Hard-Limit-Wächter (Daily Loss, Max Drawdown), Modus-Umschalter (`PAPER [$1,000]` / `LIVE`) und **EMERGENCY KILL SWITCH (Flatten All 20)**.
-2. **Linke Zone — Automatischer Multi-Source Scheduled Screener & Strategie-Konfigurator**:
-   - **Scheduled Multi-Exchange Screener (wie links oben im Foto)**:
-     - Läuft automatisch im hinterlegten Intervall-Schedule über alle 6 Quellen (*Kraken, CCXT, Gainium, Binance, Alpaca, Alpha Vantage*).
-     - Filterbar nach Quelle (`ALL`, `KRAKEN`, `CCXT`, `GAINIUM`, `BINANCE`, `ALPACA`, `ALPHAVANTAGE`) oder Signal-Typ (*Universe*, *High RVOL*, *Breakout*).
-     - Kompakte Spalten: `SYM`, `SRC`, `PRICE`, `RVOL`, `CHG %`, `SPREAD`. Klick auf jede Zeile lädt sofort Kerzen und Orderbuch.
-   - **Strategie-Steuerung & Parameter**:
-     - Vorlagen-Auswahl (*SniperFusion v3.1*, *MTF CISD Breakout*, *1m Flip-Sensor*, *Sigma Z-Score Reversion*, *ATR Trend*), Neu-Anlage, Speichern und JSON-/Drive-Import.
-     - Direkt sichtbare Kernparameter: Richtung (`LONG & SHORT`, `LONG`, `SHORT`), Zeitraum (`200`–`1000` Bars), **Startkapital (`$1,000.00`)**, **Max. gleichzeitige Trades (`20`)**, Risiko pro Trade (`%`), Hebel, Gebühren (`%`), Slippage (`bps`), Stop-Loss (`ATR Multiplikator`) und **Exit-Modus** (`TP Ladder`, `Auto TP`, `Fractal TP`, `Trailing from Top`).
-     - Aufklappbares Akkordeon **„Erweitert“** für Indikator-Perioden, Z-Score-Schwellen, Profit-Lock Giveback R und Shadow-Engine-Gegenlauf.
-     - Primärer Button **„Backtest starten / Berechnen“** (inkl. Validierung, Doppelstart-Sperre und Abbruch-Button).
-3. **Zentrale Zone — Asset-Dossier, Animierte Pipeline, Haupt-Chart & Ergebnis-Ledger**:
-   - **Asset- & Strategie-Kopf (wie Mitte oben im Foto)**: Aktives Symbol, Datenquelle in der Kaskade, 24h-Range-Balken, `Price`, `Change`, `RVol`, `VWAP`, `ATR` und aktueller Status der inversen Shadow-Position.
-   - **Animierter Pipeline-Strip (wie im Video)**: `SCANNER → CHECK (≤20 Trades) → SIZER ($1k Basis) → EXECUTOR → LOGGER` mit Live-Indikator für durchgelassene und gefilterte Signale.
-   - **Interaktiver Haupt-Chart**: Echte OHLCV-Kerzen mit leuchtenden `ENTER`/`EXIT`/`SL`/`TP`-Markern, aktiven Stop-/Trailing-Linien sowie umschaltbarer **Equity-Kurve (Start bei `$1,000.00`)** und **Drawdown-Kurve**.
-   - **Unteres Multi-Tab-Dock**:
-     - *Trade-Liste & Execution Log*: Alle Round-Trips und Live-Events (`ENTER` / `EXIT` / `FILTERED`, Zeit, Quelle, Preis, Größe, Gebühren, Net PnL, Return %, MFE, MAE, exakter `reason`-Text).
-     - *Performance & Risiko-Metriken*: Net Profit (auf `1.000 $` Basis), Profit Factor, Win Rate, Sharpe, Sortino, Max Drawdown, Expectancy, Peak Concurrent Trades (`max 20`).
-     - *Aktive Trades (`X / 20`) & Execution Blotter*: Übersicht aller aktuell offenen Positionen (maximal 20), manuelles Order-Ticket, Einzel-Close oder Flatten-All.
-     - *Pine Script v6 Editor*: Editierbarer Pine-Script-v6-Code mit One-Click-Copy und `.pine`-Export.
-     - *Diagnose & System-Logs*: Status der 6 Datenquellen-Adapter, Scheduled-Screener-Läufe und API-Logs.
-4. **Rechte Zone — Echtzeit-Chronik (*Chronicle of Events*) & *Beam of Absorption* (Orderbuch)**:
-   - **Chronicle of Events (wie rechts oben im Foto)**: Laufender Stream der automatischen Scheduled-Screener-Treffer (`VWAP cross`, `High of Day`, `RVOL Spike`, `New Entry`, `Max 20 Cap Block`) über alle 6 Quellen.
-   - **Orderbuch & *Beam of Absorption* (wie rechts unten im Foto)**: L2 Bid/Ask-Tiefe mit horizontalen Absorptions-Balken für Kaufdruck vs. Verkaufsdruck.
+-   **Key User Flows**:
+    1.  **Passive Event-Triggered Analysis**: As the Teleprompter broadcasts a new RVOL spike or macro headline, the pipeline extracts the pure script text, triggers a subtle acoustic radar cue, runs the 5 parallel agents, and updates the Convergence Card with token count and round-trip latency.
+    2.  **Multisensory Debate Playback**: Users can enable automatic on-air convergence briefings or click individual agent speaker buttons to hear each persona read its thesis in its distinct voice (`Charon`, `Fenrir`, `Kore`, `Zephyr`, `Puck`).
+    3.  **High-Convergence Execution**: When convergence clears the threshold without a Risk-Corset veto, the Terminal War Room automatically submits a risk-capped Paper order with SL/TP brackets, triggers the execution chime, and logs the trade; meanwhile the TV Studio tab shows the clean chart-clickable setup levels.
+    4.  **Tuning Risk & Adaptive Balance**: Inside the Terminal War Room tab, the user configures the Convergence Threshold (`65%–95%`), Risk-per-Trade Cap (`1%–10%`), and Auto-Execution toggle.
+-   **Visual Identity & Theme**:
+    -   *Aesthetic Direction*: High-precision institutional broadcast desk & dark financial terminal matching the existing dark studio shell.
+    -   *Color Palette & Mood*: Deep slate canvas (`#07090E`), structural panel surfaces (`#0B0F15` / `#0C1118`) with crisp `1px` borders (`#263042`), semantic accents reserved strictly for state and actions — Bullish Emerald (`#089981`), Bearish Crimson (`#F23645`), Risk-Corset Amber (`#F59E0B`), and Adaptive Cyan (`#00E5FF`).
+    -   *Typography & Hierarchy*: Clean sans-serif headings paired with `tabular-nums` monospace telemetry for all prices, RVOL ratios, convergence percentages, token counts, and latencies.
+    -   *Component Styling & Layout*: Flat single-elevation grid panels separated by clean `1px` borders and whitespace; static metadata rendered as quiet separator-delimited text (`·`) with zero decorative pills, pulsing dots, or thick left accent bars.
+-   **Interactive Feedback & Motion**:
+    -   Skeleton/analyzing state during parallel agent evaluation (`~150–400ms` visual transition), instant chart symbol jump when clicking a convergence setup, and clear veto/cooldown reason banners if an execution is blocked by the Risk Corset.
 
 ---
 
 ## 3. Key Product Decisions & Trade-Offs
 
-- **Decision 1: Deterministische 6-Stufen-Provider-Kaskade (`Kraken → CCXT → Gainium → Binance → Alpaca → Alpha Vantage`)**
-  - *Gewählter Ansatz*: Ein zentraler Backend-Market-Data-Service prüft der Reihe nach Kraken, CCXT-Endpunkte, Gainium, Binance (`data-api.binance.vision` / `api.binance.com`), Alpaca und Alpha Vantage. Sobald eine Quelle valide OHLCV-Kerzen bzw. Ticker liefert, wird diese Quelle mit ihrem echten Provider-Tag (`KRAKEN`, `CCXT`, `GAINIUM`, `BINANCE`, `ALPACA`, `ALPHAVANTAGE`) ausgeliefert. Falls für einen spezifischen Anbieter ein API-Key in `.env` benötigt wird und noch fehlt, meldet die Diagnose exakt den fehlenden Key und schaltet verzögerungsfrei auf das nächste Glied der Kaskade weiter.
-- **Decision 2: Automatischer Scheduled Screener im Backend & Frontend**
-  - *Gewählter Ansatz*: Ein Hintergrund-Scheduler scannt periodisch das Multi-Exchange-Universum aus allen 6 Quellen, berechnet RVOL, 24h-Change, Spread und VWAP-Abstand und speist die Ergebnisse automatisch in die linke Screener-Tabelle sowie in die rechte Event-Chronik ein.
-- **Decision 3: Striktes `1.000 $` Paper-Konto & `20 Trades` Hard-Cap**
-  - *Gewählter Ansatz*: Sowohl der Paper-Ledger im Backend als auch der Backtester und Positions-Sizer starten exakt mit `$1,000.00` und blockieren jeden 21. gleichzeitigen Trade hart im Risiko-Gate.
+-   **Decision 1: Pure Teleprompter Script Extraction Over Full Terminal State Dumps**
+    -   *Chosen Approach*: Distill only the active Teleprompter script text plus a 1-line market header (`Symbol | Price | 24h% | RVOL | VWAP/Z-Score | F&G`) into a compact plain-text context block (~120–180 tokens) shared read-only across the 5 parallel agent calls.
+    -   *Why*: Minimizes input tokens, slashes LLM response latency for time-sensitive breakouts, and ensures agents reason over the exact narrative the operator is hearing.
+    -   *Alternatives Considered*: Passing full orderbook arrays, 300 candles, and full news HTML per agent (5x–10x higher token cost and multi-second latency).
+-   **Decision 2: Strictly Isolated Parallel Calls + Deterministic Risk-Corset Aggregation**
+    -   *Chosen Approach*: Run the 5 agent prompts concurrently via `Promise.all` with zero shared chain-of-thought between agents, then compute the final convergence score, Risk-Corset veto check, and geometric ATR/price Entry-SL-TP synthesis in a deterministic server aggregator.
+    -   *Why*: Guarantees reasoning independence (Skeptic cannot be swayed by Trend-Follower's tone) while keeping SL/TP math exact, bounded, and hallucination-free.
+    -   *Alternatives Considered*: Single multi-persona prompt or sequential round-robin debate (causes persona bleed and multiplies latency).
+-   **Decision 3: Strict Broadcast Isolation vs. Full Terminal Execution**
+    -   *Chosen Approach*: Auto-execution into the isolated Paper Book runs via the Main Terminal War Room policy and `/api/kraken/cli/paper-bridge/execute` + bracket endpoints, while the TV Studio Stream tab displays only live market convergence and trade levels.
+    -   *Why*: Preserves the broadcast stream's strict separation from Paper Book balances/fills while delivering full automated Paper execution in the terminal.
 
 ---
 
-## 4. Technical Architecture & Data Strategy *(Technical Reference)*
+## 4. Technical Architecture & Data Strategy
 
-### Architecture & Component Diagram
+-   **System Architecture & Data Flow**:
 
 ```
-┌───────────────────────────────────────────────────────────────────────────────────────────────────┐
-│ TOP COMMAND BAR: [OMEGA NIO] · [Symbol/TF] · [Active Provider] · [Equity: $1,000.00] · [Trades: X/20] │
-├───────────────────────────┬────────────────────────────────────────────────┬──────────────────────┤
-│ LEFT COLUMN (310px)       │ CENTER COLUMN (Flex 1)                         │ RIGHT COLUMN (290px) │
-│                           │                                                │                      │
-│ 1. Scheduled Multi-Source │ 1. Active Asset Dossier & Animated Pipeline    │ 1. Chronicle Stream  │
-│    Screener (Auto-Cron)   │    - Provider Tag · 24h Range · Shadow Status  │    - Live Scheduled  │
-│    [Kraken|CCXT|Gainium|  │    - [SCAN]──►[CHECK ≤20]──►[SIZE]──►[EXEC]    │      Screener Hits   │
-│     Binance|Alpaca|AlphaV]│                                                │      across 6 Sources│
-│                           │ 2. Interactive Price / Equity ($1k) / DD Chart │                      │
-│ 2. Strategy Configurator  │    - OHLCV Candles + Glowing ENTER/EXIT Dots   │ 2. Beam of Absorption│
-│    - Capital: $1,000.00   │    - Active SL / TP / Trailing Lines           │    & L2 Orderbook    │
-│    - Max Open Trades: 20  ├────────────────────────────────────────────────┤    - Bid/Ask Depth   │
-│    - Risk%, Fee%, ATR SL  │ 3. Dense Evaluation & Execution Ledger         │    - Imbalance Bars  │
-│    - [+] Advanced & Shadow│    [Trade Log (ENTER/EXIT/FILTERED)]           │    - Quick Order     │
-│                           │    [Performance & Risk] [Open Trades (X / 20)] │      Ticket ($1k Cap)│
-│ 3. Primary Actions        │    [Pine Script v6 Editor] [Provider Logs]     │                      │
-│    [Run Backtest / Cancel]│                                                │                      │
-│    [Save] [CSV/JSON/.pine]│                                                │                      │
-└───────────────────────────┴────────────────────────────────────────────────┴──────────────────────┘
-                                             │
-                                             ▼
-┌───────────────────────────────────────────────────────────────────────────────────────────────────┐
-│ EXPRESS BACKEND: 6-PROVIDER CASCADE, SCHEDULED SCREENER & $1,000 PAPER LEDGER (MAX 20 TRADES)     │
-│ - /api/market/ohlc & /api/backtest/run (Cascade: Kraken → CCXT → Gainium → Binance → Alpaca → AV) │
-│ - /api/screener/schedule (Auto-running cron across all 6 sources + manual trigger & status)       │
-│ - /api/strategies & /api/kraken/cli/paper/* ($1,000 initial balance, 20 concurrent trades guard)  │
-└───────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────────────────────────────┐
+│ LIVE INPUTS: Teleprompter Script Feed + Screener RVOL + Macro/News/CMC    │
+└───────────────────────────────┬───────────────────────────────────────────┘
+                                │ Pure Script-Context Extractor (Minimal Tokens)
+                                ▼
+┌───────────────────────────────────────────────────────────────────────────┐
+│ SERVER CONVERGENCE ENGINE (5 Parallel Isolated Gemini Calls)              │
+│  ┌──────────────── Fixed Risk Corset ─────────────────┐  ┌── Adaptive ──┐ │
+│  │ 1. Strategist  │ 2. Skeptic  │ 3. Mean-Reversion   │  │ 4. Trend     │ │
+│  │ (Charon)       │ (Kore)      │ (Zephyr)            │  │    (Fenrir)  │ │
+│  │                │             │                     │  │ 5. News      │ │
+│  │                │             │                     │  │    (Puck)    │ │
+│  └────────────────┴─────────────┴─────────────────────┘  └──────┬───────┘ │
+│                                │                                │         │
+│                                ▼                                ▼         │
+│         Deterministic Risk-Corset Veto + Entry/SL/TP Synthesizer          │
+└──────────┬───────────────────────────────────────────┬────────────────────┘
+           │                                           │
+           ▼                                           ▼
+┌────────────────────────────────┐       ┌──────────────────────────────────┐
+│ TV STUDIO STREAM TAB           │       │ TERMINAL WAR ROOM PANEL          │
+│ · Clean 5-Agent Stances        │       │ · Full Debate + Risk Controls    │
+│ · Convergence & Setup Levels   │       │ · Risk-Capped Paper Auto-Execute │
+│ · Distinct Voice + Chime Cues  │       │ · SL/TP Brackets & Fill Ledger   │
+└────────────────────────────────┘       └──────────────────────────────────┘
 ```
 
-### Interactive Component & State Mapping
-
-- **Multi-Source-Kaskade bei Symbol-/Zeitrahmenwechsel**: Wechselt der Nutzer auf z. B. `BTC/USD`, `PEPE/USDT`, `ZEC/USDT`, `SOL/USD`, `NVDA` oder `EUR/USD`, durchläuft das Backend automatisch `Kraken → CCXT → Gainium → Binance → Alpaca → Alpha Vantage`, lädt die echten Kerzen und zeigt den liefernden Provider transparent an.
-- **Automatischer Scheduled Screener**: Läuft im einstellbaren Takt (z. B. 15s / 30s / 60s), aktualisiert alle Symbole der 6 Quellen und erzeugt Echtzeit-Einträge in der *Chronicle of Events*.
-- **`$1,000` Startkapital & `20 Trades` Limit**: Jede Positionsgrößenberechnung basiert standardmäßig auf `$1,000.00` Equity; versucht ein Backtest oder Bot einen 21. Trade gleichzeitig zu öffnen, greift sofort die Sperre `MAX_CONCURRENT_TRADES (20/20)` und protokolliert den Vorgang als `FILTERED`.
+-   **Data Model & State**:
+    -   `AgentPersonaId`: `'STRATEGIST' | 'TREND_FOLLOWER' | 'SKEPTIC' | 'MEAN_REVERSION' | 'NEWS_TRADER'` with static metadata defining `group` (`'RISK_CORSET' | 'ADAPTIVE'`), Google voice ID (`Charon`, `Fenrir`, `Kore`, `Zephyr`, `Puck`), Web Speech pitch/rate signature, and acoustic chime trigger.
+    -   `PureTeleprompterContext`: Extracted script text, resolved symbol, spot price, 24h change, RVOL, Fear & Greed index, character count, and estimated token budget.
+    -   `AgentConvergenceDecision`: Timestamp, ID, cycle trigger (`'TELEPROMPTER' | 'RVOL_SPIKE' | 'MACRO_EVENT' | 'MANUAL'`), 5 individual `AgentVote` items (`stance`, `confidence`, `thesis`, `riskNote`, `latencyMs`), `convergencePct`, `consensusDirection` (`'LONG' | 'SHORT' | 'WAIT'`), `riskCorsetVetoed`, `tradeSetup` (`symbol`, `direction`, `entryPrice`, `stopLoss`, `takeProfit`, `riskRewardRatio`), `tokensSavedNote`, and `totalLatencyMs`.
+    -   `AgentExecutionConfig`: `autoExecuteEnabled`, `minConvergencePct` (default `75`), `maxRiskPctPerTrade` (default `3%`), `cooldownSecPerSymbol` (default `600s`), persisted in bounded memory/storage with strict `MAX_HISTORY = 24` memory caps.
+-   **Interactive Component & State Mapping**:
+    -   **Event Trigger Hook**: Watches Teleprompter active broadcasts and incoming Screener/News RVOL spikes (debounced with cooldown & symbol-state deduplication) and invokes the server convergence synthesis endpoint.
+    -   **Multisensory Voice & Chime Dispatcher**: Queues distinct agent voice snippets sequentially through Google Natural Voices (using each persona's `voice` & `style` metadata) and dispatches role-matched Web Audio chimes without colliding with active voice playback.
+    -   **Risk-Capped Auto-Executor**: On qualifying `LONG` convergence (or closing an open position on `SHORT` convergence) when `autoExecuteEnabled` is active, executes a bounded Paper order sized by `maxRiskPctPerTrade` and attaches SL/TP brackets immediately.
+    -   **Dual UI Views**: Shares a unified convergence panel component parameterized by `mode="STUDIO" | "TERMINAL"` — hiding Paper Book execution controls/balances in `STUDIO` mode while exposing full risk/auto-execution controls and execution logs in `TERMINAL` mode.

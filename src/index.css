@@ -138,3 +138,24 @@
   will-change: transform;
 }
 
+@keyframes studioTickerScroll {
+  0% {
+    transform: translateX(0);
+  }
+  100% {
+    transform: translateX(-50%);
+  }
+}
+
+.animate-studio-ticker {
+  display: flex;
+  width: max-content;
+  animation: studioTickerScroll 42s linear infinite;
+  will-change: transform;
+}
+
+.animate-studio-ticker-paused {
+  animation-play-state: paused;
+}
+
+
